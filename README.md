@@ -1,5 +1,6 @@
 # medusa-mcp
 
+[![AgentHub 已收录：Medusa](https://myagenthub.cn/badge/io.github.trhonpavel/medusa-mcp)](https://myagenthub.cn/p/io.github.trhonpavel/medusa-mcp)
 🇨🇿 [Česky](README.cs.md)
 
 An [MCP](https://modelcontextprotocol.io) server for the **Medusa v2 Admin API**. It gives Claude (or any MCP client) access to orders, customers, products and inventory, computes sales reports, and manages the store – fulfillment, payments and refunds, returns, draft orders, products and variants, catalog, promotions and price lists – with guard rails on destructive actions.
