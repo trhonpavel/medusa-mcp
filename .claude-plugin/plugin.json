@@ -1,8 +1,8 @@
 {
   "name": "medusa",
   "displayName": "Medusa",
-  "version": "0.3.0",
-  "description": "Manage a Medusa v2 store: orders, payments, returns, products, catalog, inventory, promotions, price lists and sales reports.",
+  "version": "0.4.0",
+  "description": "Run a Medusa v2 store: orders, payments, returns, products, inventory, promotions, plus sales and restock dashboards.",
   "author": {
     "name": "Pavel Trhoň",
     "url": "https://github.com/trhonpavel"
@@ -23,7 +23,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "medusa-mcp@0.3.0",
+        "medusa-mcp@0.4.0",
         "stdio"
       ],
       "env": {

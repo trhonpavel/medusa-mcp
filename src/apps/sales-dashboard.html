@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sales dashboard</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: var(--color-background-primary, light-dark(#ffffff, #1f1e1c));
+  --bg2: var(--color-background-secondary, light-dark(#f6f5f2, #2a2926));
+  --fg: var(--color-text-primary, light-dark(#1d1b18, #ecebe7));
+  --muted: var(--color-text-secondary, light-dark(#6b665e, #a8a49c));
+  --line: var(--color-border-tertiary, light-dark(#e6e2da, #3a3833));
+  --accent: var(--color-text-info, light-dark(#2f6f8f, #7ab8d6));
+  --good: var(--color-text-success, light-dark(#2e7d4f, #6cc28f));
+  --bad: var(--color-text-danger, light-dark(#b3412f, #f08a78));
+  --bar: light-dark(#3d7ea6, #6fb0d4);
+  --bar-dim: light-dark(#c9dbe6, #35505f);
+  --radius: var(--border-radius-lg, 12px);
+  --font: var(--font-sans, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: transparent; }
+body { font: 14px/1.45 var(--font); color: var(--fg); padding: 14px; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 16px; margin-bottom: 12px; }
+h1 { font-size: 16px; font-weight: var(--font-weight-semibold, 600); margin: 0; }
+.sub { color: var(--muted); font-size: 12px; }
+.presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.presets button {
+  font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--bg); color: var(--fg);
+}
+.presets button[aria-pressed="true"] { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.presets button:disabled { opacity: .5; cursor: progress; }
+.kpis { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 12px; }
+@media (min-width: 560px) { .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.kpi { background: var(--bg2); border-radius: var(--radius); padding: 10px 12px; min-width: 0; }
+.kpi .label { color: var(--muted); font-size: 12px; }
+.kpi .value { font-size: 20px; font-weight: var(--font-weight-semibold, 600); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.delta { font-size: 12px; font-variant-numeric: tabular-nums; }
+.delta.up { color: var(--good); } .delta.down { color: var(--bad); } .delta.flat { color: var(--muted); }
+.card { border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; margin-bottom: 12px; background: var(--bg); }
+.card h2 { font-size: 13px; font-weight: var(--font-weight-semibold, 600); margin: 0 0 8px; display: flex; justify-content: space-between; gap: 8px; }
+.card h2 span { color: var(--muted); font-weight: normal; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.grid2 .card { margin-bottom: 0; }
+svg { display: block; width: 100%; overflow: visible; }
+svg text { fill: var(--muted); font-size: 10px; font-family: var(--font); }
+.gridline { stroke: var(--line); stroke-width: 1; }
+.bar { fill: var(--bar); } .bar:hover { opacity: .8; }
+.bar.zero { fill: var(--bar-dim); }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+td { padding: 5px 0; border-top: 1px solid var(--line); vertical-align: middle; }
+tr:first-child td { border-top: 0; }
+td.num { text-align: right; white-space: nowrap; padding-left: 10px; }
+td.name { max-width: 0; width: 100%; }
+td.name div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.meter { height: 3px; background: var(--bar-dim); border-radius: 2px; margin-top: 3px; }
+.meter i { display: block; height: 100%; background: var(--bar); border-radius: 2px; }
+.empty, .error { padding: 28px 12px; text-align: center; color: var(--muted); }
+.error { color: var(--bad); }
+.loading main { opacity: .45; transition: opacity .2s; }
+footer { color: var(--muted); font-size: 11px; margin-top: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1 id="title">Sales</h1>
+    <div class="sub" id="subtitle"></div>
+  </div>
+  <div class="presets" id="presets"></div>
+</header>
+<main id="main"><div class="empty" id="placeholder">Loading…</div></main>
+<footer id="footer"></footer>
+<script type="module">
+/*__MCP_APPS_RUNTIME__*/
+
+const { App, applyDocumentTheme, applyHostStyleVariables, applyHostFonts } = McpApps;
+
+const TEXT = {
+  en: {
+    title: "Sales", loading: "Loading…", empty: "No orders in this period.", revenue: "Revenue", net: "Net revenue",
+    orders: "Orders", aov: "Avg. order", units: "Units sold", customers: "Customers", refunds: "refunds",
+    vs: "vs", trend: "Revenue over time", top: "Top products", codes: "Discount codes", countries: "Countries",
+    pcs: (n) => (n === 1 ? "pc" : "pcs"), none: "—", error: "Could not load the report", truncated: "Data truncated – narrow the period.",
+    unknown: "Not specified", otherCurrencies: "Also",
+    presets: { last_7: "7 days", last_30: "30 days", this_month: "This month", last_month: "Last month", this_year: "This year" },
+    context: (f, t) => `The user switched the sales dashboard to ${f} – ${t}.`,
+  },
+  cs: {
+    title: "Prodeje", loading: "Načítám…", empty: "V tomto období nejsou žádné objednávky.", revenue: "Obrat", net: "Čistý obrat",
+    orders: "Objednávky", aov: "Průměrná objednávka", units: "Prodané kusy", customers: "Zákazníci", refunds: "refundace",
+    vs: "oproti", trend: "Obrat v čase", top: "Nejprodávanější produkty", codes: "Slevové kódy", countries: "Země",
+    pcs: () => "ks", none: "—", error: "Report se nepodařilo načíst", truncated: "Data jsou oříznutá – zkraťte období.",
+    unknown: "Neuvedeno", otherCurrencies: "Navíc",
+    presets: { last_7: "7 dní", last_30: "30 dní", this_month: "Tento měsíc", last_month: "Minulý měsíc", this_year: "Letos" },
+    context: (f, t) => `Uživatel přepnul prodejní dashboard na období ${f} – ${t}.`,
+  },
+};
+
+let locale = navigator.language || "en";
+let t = TEXT.en;
+const state = { data: null, loading: true, error: null, preset: null };
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+
+function setLocale(l) {
+  locale = l || locale;
+  t = locale.toLowerCase().startsWith("cs") || locale.toLowerCase().startsWith("sk") ? TEXT.cs : TEXT.en;
+  document.documentElement.lang = t === TEXT.cs ? "cs" : "en";
+}
+setLocale(locale);
+
+function applyContext(ctx) {
+  if (!ctx) return;
+  if (ctx.theme) applyDocumentTheme(ctx.theme);
+  if (ctx.styles?.variables) applyHostStyleVariables(ctx.styles.variables);
+  if (ctx.styles?.css?.fonts) applyHostFonts(ctx.styles.css.fonts);
+  if (ctx.locale) setLocale(ctx.locale);
+}
+
+const money = (v, cur) => {
+  try {
+    return new Intl.NumberFormat(locale, {
+      style: "currency", currency: cur, currencyDisplay: "narrowSymbol",
+      minimumFractionDigits: 0, maximumFractionDigits: Math.abs(v) >= 100 ? 0 : 2,
+    }).format(v);
+  } catch { return `${Number(v).toLocaleString(locale)} ${cur}`; }
+};
+const num = (v) => Number(v ?? 0).toLocaleString(locale, { maximumFractionDigits: 2 });
+const dayFmt = (ymd) => {
+  const [y, m, d] = ymd.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString(locale, { day: "numeric", month: "short", timeZone: "UTC" });
+};
+const dateFmt = (ymd) => {
+  const [y, m, d] = ymd.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString(locale, { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+};
+
+// ---------- periods ----------
+const ymd = (d) => d.toISOString().slice(0, 10);
+const shift = (s, days) => { const d = new Date(s + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + days); return ymd(d); };
+function todayIn(tz) {
+  try { return new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()); }
+  catch { return ymd(new Date()); }
+}
+function presetRange(p, tz) {
+  const today = todayIn(tz);
+  const [y, m] = today.split("-").map(Number);
+  switch (p) {
+    case "last_7": return { from: shift(today, -6), to: today };
+    case "last_30": return { from: shift(today, -29), to: today };
+    case "this_month": return { from: `${today.slice(0, 7)}-01`, to: today };
+    case "last_month": {
+      const first = new Date(Date.UTC(y, m - 2, 1)); const last = new Date(Date.UTC(y, m - 1, 0));
+      return { from: ymd(first), to: ymd(last) };
+    }
+    case "this_year": return { from: `${y}-01-01`, to: today };
+  }
+}
+const groupFor = (from, to) => {
+  const days = (Date.parse(to) - Date.parse(from)) / 86400000 + 1;
+  return days <= 62 ? "day" : days <= 200 ? "week" : "month";
+};
+function matchPreset(d) {
+  if (!d?.period) return null;
+  const tz = d.period.timezone;
+  for (const p of Object.keys(TEXT.en.presets)) {
+    const r = presetRange(p, tz);
+    if (r.from === d.period.from && r.to === d.period.to) return p;
+  }
+  return null;
+}
+
+// ---------- data ----------
+function parse(result) {
+  if (!result) return { error: "No result" };
+  if (result.isError) return { error: result.content?.find((c) => c.type === "text")?.text ?? "Error" };
+  if (result.structuredContent) return { data: result.structuredContent };
+  try { return { data: JSON.parse(result.content?.find((c) => c.type === "text")?.text ?? "") }; }
+  catch { return { error: "Unexpected response" }; }
+}
+function show(result) {
+  const r = parse(result);
+  state.error = r.error ?? null;
+  if (r.data) { state.data = r.data; state.preset = matchPreset(r.data); }
+  state.loading = false;
+  render();
+}
+
+const app = new App({ name: "Medusa sales dashboard", version: "1.0.0" });
+app.ontoolinput = () => { state.loading = true; render(); };
+app.ontoolresult = show;
+app.onhostcontextchanged = () => { applyContext(app.getHostContext()); render(); };
+app.ontoolcancelled = () => { state.loading = false; render(); };
+
+async function load(preset) {
+  const tz = state.data?.period?.timezone || app.getHostContext()?.timeZone || "UTC";
+  const { from, to } = presetRange(preset, tz);
+  state.loading = true; state.preset = preset; render();
+  try {
+    const res = await app.callServerTool({
+      name: "sales_report",
+      arguments: { from, to, group_by: groupFor(from, to), compare: "previous_period", include: ["countries", "discount_codes"], timezone: tz },
+    });
+    show(res);
+    app.updateModelContext({ content: [{ type: "text", text: t.context(from, to) }] }).catch(() => {});
+  } catch (e) {
+    state.loading = false; state.error = String(e?.message ?? e); render();
+  }
+}
+
+// ---------- rendering ----------
+function mainCurrency(d) {
+  const entries = Object.entries(d.totals ?? {});
+  if (!entries.length) return Object.keys(d.change ?? {})[0] ?? "EUR";
+  return entries.sort(([, x], [, y]) => (y.revenue ?? 0) - (x.revenue ?? 0))[0][0];
+}
+function deltaHtml(ch) {
+  if (!ch || ch.change_pct === null || ch.change_pct === undefined) return ch && ch.previous === 0 && ch.change > 0 ? `<span class="delta up">▲ ${t.vs} 0</span>` : "";
+  const cls = ch.change_pct > 0.5 ? "up" : ch.change_pct < -0.5 ? "down" : "flat";
+  const arrow = cls === "up" ? "▲" : cls === "down" ? "▼" : "•";
+  return `<span class="delta ${cls}">${arrow} ${Math.abs(ch.change_pct).toLocaleString(locale, { maximumFractionDigits: 1 })} %</span>`;
+}
+function kpis(d, cur) {
+  const tot = d.totals?.[cur] ?? {};
+  const ch = d.change?.[cur] ?? {};
+  const others = Object.entries(d.totals ?? {}).filter(([c]) => c !== cur && d.totals[c].revenue);
+  const cards = [
+    [t.revenue, money(tot.revenue ?? 0, cur), ch.revenue, others.length ? `${t.otherCurrencies} ${others.map(([c, v]) => money(v.revenue, c)).join(", ")}` : ""],
+    [t.orders, num(tot.orders), ch.orders],
+    [t.aov, money(tot.avg_order_value ?? 0, cur), ch.avg_order_value],
+    [t.units, num(tot.items_sold), ch.items_sold],
+    [t.customers, num(tot.unique_customers), ch.unique_customers],
+  ];
+  if (tot.refunded) cards.splice(1, 0, [t.net, money(tot.net_revenue ?? 0, cur), ch.net_revenue, `−${money(tot.refunded, cur)} ${t.refunds}`]);
+  return `<section class="kpis">${cards
+    .map(([label, value, delta, extra]) => `<div class="kpi"><div class="label">${esc(label)}</div><div class="value" title="${esc(value)}">${esc(value)}</div>${deltaHtml(delta)}${extra ? `<div class="sub">${esc(extra)}</div>` : ""}</div>`)
+    .join("")}</section>`;
+}
+function fillDays(d, cur) {
+  const pts = new Map((d.series ?? []).map((s) => [s.period, s[cur]?.revenue ?? 0]));
+  if (d.period?.group_by !== "day" || !/^\d{4}-\d{2}-\d{2}$/.test(d.period.from)) return [...pts.entries()];
+  const out = [];
+  for (let day = d.period.from; day <= d.period.to && out.length < 400; day = shift(day, 1)) out.push([day, pts.get(day) ?? 0]);
+  return out;
+}
+function chart(d, cur) {
+  const pts = fillDays(d, cur);
+  if (!pts.length) return "";
+  const W = Math.max(280, $("main").clientWidth - 26), H = 150, padL = 44, padB = 18, padT = 6;
+  const max = Math.max(...pts.map(([, v]) => v), 1);
+  const step = niceStep(max / 3);
+  const top = Math.ceil(max / step) * step;
+  const bw = (W - padL) / pts.length;
+  const y = (v) => padT + (H - padT - padB) * (1 - v / top);
+  let svg = "";
+  for (let v = 0; v <= top + 1e-9; v += step)
+    svg += `<line class="gridline" x1="${padL}" x2="${W}" y1="${y(v)}" y2="${y(v)}"/><text x="${padL - 6}" y="${y(v) + 3}" text-anchor="end">${esc(compact(v))}</text>`;
+  pts.forEach(([label, v], i) => {
+    const h = Math.max(v > 0 ? 2 : 1, (H - padT - padB) * (v / top));
+    const x = padL + i * bw + Math.min(2, bw * 0.15);
+    svg += `<rect class="bar${v ? "" : " zero"}" x="${x}" y="${H - padB - h}" width="${Math.max(1, bw - Math.min(4, bw * 0.3))}" height="${h}" rx="1.5"><title>${esc(label)}: ${esc(money(v, cur))}</title></rect>`;
+  });
+  const ticks = pts.length <= 8 ? pts.map((_, i) => i) : [0, Math.floor((pts.length - 1) / 2), pts.length - 1];
+  for (const i of ticks) {
+    const label = /^\d{4}-\d{2}-\d{2}$/.test(pts[i][0]) ? dayFmt(pts[i][0]) : pts[i][0];
+    svg += `<text x="${padL + i * bw + bw / 2}" y="${H - 4}" text-anchor="${i === 0 ? "start" : i === pts.length - 1 ? "end" : "middle"}">${esc(label)}</text>`;
+  }
+  return `<section class="card"><h2>${esc(t.trend)} <span>${esc(cur)}</span></h2><svg viewBox="0 0 ${W} ${H}" height="${H}" role="img" aria-label="${esc(t.trend)}">${svg}</svg></section>`;
+}
+function niceStep(x) {
+  const p = Math.pow(10, Math.floor(Math.log10(Math.max(x, 1e-9))));
+  return [1, 2, 2.5, 5, 10].map((m) => m * p).find((s) => s >= x) ?? 10 * p;
+}
+function countryName(code) {
+  if (!code || code === "UNKNOWN") return t.unknown;
+  try { return new Intl.DisplayNames([locale], { type: "region" }).of(code) ?? code; } catch { return code; }
+}
+const compact = (v) => Number(v).toLocaleString(locale, { notation: "compact", maximumFractionDigits: 1 });
+function list(title, rows, cur, opts) {
+  if (!rows?.length) return "";
+  const max = Math.max(...rows.map(opts.weight), 1);
+  return `<section class="card"><h2>${esc(title)}</h2><table>${rows
+    .map((r) => `<tr><td class="name"><div title="${esc(opts.name(r))}">${esc(opts.name(r))}</div><div class="meter"><i style="width:${(100 * opts.weight(r)) / max}%"></i></div></td><td class="num">${esc(opts.a(r))}</td><td class="num">${esc(opts.b(r, cur))}</td></tr>`)
+    .join("")}</table></section>`;
+}
+
+function render() {
+  document.body.classList.toggle("loading", state.loading && !!state.data);
+  $("title").textContent = t.title;
+  const d = state.data;
+  const presets = Object.entries(t.presets)
+    .map(([k, label]) => `<button data-p="${k}" aria-pressed="${state.preset === k}" ${state.loading ? "disabled" : ""}>${esc(label)}</button>`)
+    .join("");
+  $("presets").innerHTML = presets;
+  $("presets").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => load(b.dataset.p)));
+  if (!d) {
+    $("main").innerHTML = state.error ? `<div class="error">${esc(t.error)}: ${esc(state.error)}</div>` : `<div class="empty">${esc(t.loading)}</div>`;
+    return;
+  }
+  const cur = mainCurrency(d);
+  const period = d.period?.from && /^\d{4}/.test(d.period.from) ? `${dateFmt(d.period.from)} – ${dateFmt(d.period.to)}` : "";
+  const comp = d.comparison ? ` · ${t.vs} ${dateFmt(d.comparison.from)} – ${dateFmt(d.comparison.to)}` : "";
+  $("subtitle").textContent = period + comp;
+  let html = state.error ? `<div class="error">${esc(t.error)}: ${esc(state.error)}</div>` : "";
+  if (!d.orders_considered) html += `<div class="empty">${esc(t.empty)}</div>`;
+  else {
+    html += kpis(d, cur) + chart(d, cur);
+    html += `<div class="grid2">${[
+      list(t.top, d.top_products, cur, { name: (r) => r.title, weight: (r) => r.quantity, a: (r) => `${num(r.quantity)} ${t.pcs(r.quantity)}`, b: (r, c) => (r.revenue?.[c] !== undefined ? money(r.revenue[c], c) : "") }),
+      list(t.codes, d.discount_codes, cur, { name: (r) => r.code, weight: (r) => r.orders, a: (r) => `${num(r.orders)}×`, b: (r, c) => (r.discount?.[c] !== undefined ? `−${money(r.discount[c], c)}` : "") }),
+      list(t.countries, d.countries, cur, { name: (r) => countryName(r.country), weight: (r) => r.orders, a: (r) => `${num(r.orders)}×`, b: (r, c) => (r.revenue?.[c] !== undefined ? money(r.revenue[c], c) : "") }),
+    ].join("")}</div>`;
+  }
+  $("main").innerHTML = html;
+  $("footer").textContent = d.data_truncated ? t.truncated : "";
+}
+
+let lastWidth = 0;
+new ResizeObserver(() => {
+  const w = $("main").clientWidth;
+  if (state.data && Math.abs(w - lastWidth) > 24) { lastWidth = w; render(); }
+}).observe(document.body);
+
+render();
+await app.connect();
+applyContext(app.getHostContext());
+render();
+</script>
+</body>
+</html>

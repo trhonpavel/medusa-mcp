@@ -1,10 +1,10 @@
 import { z } from "zod";
-import { limitSchema, offsetSchema, RO, wrap, type ToolContext } from "./helpers.js";
+import { limitSchema, offsetSchema, RO, type ToolContext } from "./helpers.js";
 
 export function registerInventoryTools(ctx: ToolContext) {
-  const { server, medusa, cfg } = ctx;
+  const { tool, medusa, cfg } = ctx;
 
-  server.registerTool(
+  tool(
     "list_inventory",
     {
       title: "Inventory levels",
@@ -24,7 +24,7 @@ export function registerInventoryTools(ctx: ToolContext) {
       },
       annotations: RO,
     },
-    wrap(async (a) => {
+    async (a) => {
       const base = { fields: "id,sku,title,*location_levels", q: a.q, sku: a.sku, order: "sku" };
       const shape = (it: any) => {
         const levels = (it.location_levels ?? [])
@@ -58,12 +58,12 @@ export function registerInventoryTools(ctx: ToolContext) {
       }
       const res = await medusa.get("/admin/inventory-items", { ...base, limit: a.limit, offset: a.offset });
       return { count: res.count, offset: res.offset, items: (res.inventory_items ?? []).map(shape) };
-    }),
+    },
   );
 
   if (cfg.readOnly) return;
 
-  server.registerTool(
+  tool(
     "set_stock_level",
     {
       title: "Set stock level",
@@ -80,7 +80,7 @@ export function registerInventoryTools(ctx: ToolContext) {
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
-    wrap(async (a) => {
+    async (a) => {
       if ((a.stocked_quantity === undefined) === (a.adjust_by === undefined))
         throw new Error("Provide exactly one of: stocked_quantity, adjust_by.");
       let item: any;
@@ -146,6 +146,6 @@ export function registerInventoryTools(ctx: ToolContext) {
         stocked_after: after,
         reserved: level.reserved_quantity,
       };
-    }),
+    },
   );
 }

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { MedusaError } from "../medusa.js";
+import { fetchImage } from "./fetch-image.js";
 import {
   CREATE,
   defined,
@@ -11,7 +12,6 @@ import {
   priceSchema,
   RO,
   UPDATE,
-  wrap,
   type ToolContext,
 } from "./helpers.js";
 
@@ -40,8 +40,70 @@ const newVariantSchema = z.object({
   stock: z.number().int().min(0).optional().describe("Initial stocked quantity at location_id (or the only location)"),
 });
 
+/** Product detail – shared by get_product and the product resource. Accepts an ID or a handle. */
+export async function loadProductDetail(ctx: ToolContext, ref: string) {
+  const { medusa } = ctx;
+  let id = ref.trim();
+  if (!id.startsWith("prod_")) {
+    const hit = (await medusa.get("/admin/products", { handle: id, fields: "id", limit: 1 })).products?.[0];
+    if (!hit) throw new Error(`Product ${ref} not found (use a product ID or handle).`);
+    id = hit.id;
+  }
+  let p: any;
+  try {
+    p = (
+      await medusa.get(`/admin/products/${id}`, {
+        fields:
+          "*variants,*variants.prices,*variants.inventory_items,*variants.options,*options,*options.values,*categories," +
+          "*collection,*tags,*images,*sales_channels,*shipping_profile",
+      })
+    ).product;
+  } catch (e) {
+    if (!(e instanceof MedusaError) || e.status !== 400) throw e;
+    p = (await medusa.get(`/admin/products/${id}`, { fields: "*variants,*variants.prices" })).product;
+  }
+  return {
+    id: p.id,
+    title: p.title,
+    subtitle: p.subtitle,
+    handle: p.handle,
+    status: p.status,
+    description: p.description,
+    collection: p.collection ? { id: p.collection.id, title: p.collection.title } : undefined,
+    categories: (p.categories ?? []).map((c: any) => ({ id: c.id, name: c.name })),
+    tags: (p.tags ?? []).map((t: any) => t.value),
+    thumbnail: p.thumbnail,
+    images: (p.images ?? []).map((i: any) => i.url),
+    sales_channels: p.sales_channels ? p.sales_channels.map((s: any) => s.name ?? s.id) : undefined,
+    shipping_profile: p.shipping_profile?.name,
+    discountable: p.discountable,
+    weight: p.weight ?? undefined,
+    options: (p.options ?? []).map((o: any) => ({ id: o.id, title: o.title, values: (o.values ?? []).map((v: any) => v.value) })),
+    variants: (p.variants ?? []).map((v: any) => ({
+      id: v.id,
+      title: v.title,
+      sku: v.sku,
+      barcode: v.barcode ?? undefined,
+      ean: v.ean ?? undefined,
+      options: v.options ? Object.fromEntries(v.options.map((o: any) => [o.option?.title ?? o.option_id, o.value])) : undefined,
+      manage_inventory: v.manage_inventory,
+      allow_backorder: v.allow_backorder,
+      weight: v.weight ?? undefined,
+      prices: (v.prices ?? []).map((pr: any) => ({
+        currency: pr.currency_code,
+        amount: pr.amount,
+        rules: pr.rules && Object.keys(pr.rules).length ? pr.rules : undefined,
+        min_quantity: pr.min_quantity ?? undefined,
+      })),
+      inventory_item_ids: (v.inventory_items ?? []).map((i: any) => i.inventory_item_id),
+    })),
+    metadata: p.metadata,
+    updated_at: p.updated_at,
+  };
+}
+
 export function registerProductTools(ctx: ToolContext) {
-  const { server, medusa, cfg, resolveLocationId, resolveTagIds } = ctx;
+  const { tool, medusa, cfg, confirm, resolveLocationId, resolveTagIds } = ctx;
 
   async function loadProduct(id: string, fields: string) {
     return (await medusa.get(`/admin/products/${id}`, { fields })).product;
@@ -99,7 +161,7 @@ export function registerProductTools(ctx: ToolContext) {
   }
 
   // ===== Read =====
-  server.registerTool(
+  tool(
     "list_products",
     {
       title: "List products",
@@ -115,7 +177,7 @@ export function registerProductTools(ctx: ToolContext) {
       },
       annotations: RO,
     },
-    wrap(async (a) => {
+    async (a) => {
       const res = await medusa.get("/admin/products", {
         fields: "id,title,handle,status,created_at,updated_at,variants.id,variants.title,variants.sku",
         order: "-updated_at",
@@ -139,75 +201,25 @@ export function registerProductTools(ctx: ToolContext) {
           variants: (p.variants ?? []).map((v: any) => ({ id: v.id, title: v.title, sku: v.sku })),
         })),
       };
-    }),
+    },
   );
 
-  server.registerTool(
+  tool(
     "get_product",
     {
       title: "Get product",
       description:
         "Product detail – variants, prices in all currencies, linked inventory items, options, categories, collection, tags, images and sales channels.",
-      inputSchema: { product_id: z.string().describe("Product ID (prod_…)") },
+      inputSchema: { product_id: z.string().describe("Product ID (prod_…) or handle") },
       annotations: RO,
     },
-    wrap(async (a) => {
-      let p: any;
-      try {
-        p = await loadProduct(
-          a.product_id,
-          "*variants,*variants.prices,*variants.inventory_items,*variants.options,*options,*options.values,*categories," +
-            "*collection,*tags,*images,*sales_channels,*shipping_profile",
-        );
-      } catch (e) {
-        if (!(e instanceof MedusaError) || e.status !== 400) throw e;
-        p = await loadProduct(a.product_id, "*variants,*variants.prices");
-      }
-      return {
-        id: p.id,
-        title: p.title,
-        subtitle: p.subtitle,
-        handle: p.handle,
-        status: p.status,
-        description: p.description,
-        collection: p.collection ? { id: p.collection.id, title: p.collection.title } : undefined,
-        categories: (p.categories ?? []).map((c: any) => ({ id: c.id, name: c.name })),
-        tags: (p.tags ?? []).map((t: any) => t.value),
-        thumbnail: p.thumbnail,
-        images: (p.images ?? []).map((i: any) => i.url),
-        sales_channels: p.sales_channels ? p.sales_channels.map((s: any) => s.name ?? s.id) : undefined,
-        shipping_profile: p.shipping_profile?.name,
-        discountable: p.discountable,
-        weight: p.weight ?? undefined,
-        options: (p.options ?? []).map((o: any) => ({ id: o.id, title: o.title, values: (o.values ?? []).map((v: any) => v.value) })),
-        variants: (p.variants ?? []).map((v: any) => ({
-          id: v.id,
-          title: v.title,
-          sku: v.sku,
-          barcode: v.barcode ?? undefined,
-          ean: v.ean ?? undefined,
-          options: v.options ? Object.fromEntries(v.options.map((o: any) => [o.option?.title ?? o.option_id, o.value])) : undefined,
-          manage_inventory: v.manage_inventory,
-          allow_backorder: v.allow_backorder,
-          weight: v.weight ?? undefined,
-          prices: (v.prices ?? []).map((pr: any) => ({
-            currency: pr.currency_code,
-            amount: pr.amount,
-            rules: pr.rules && Object.keys(pr.rules).length ? pr.rules : undefined,
-            min_quantity: pr.min_quantity ?? undefined,
-          })),
-          inventory_item_ids: (v.inventory_items ?? []).map((i: any) => i.inventory_item_id),
-        })),
-        metadata: p.metadata,
-        updated_at: p.updated_at,
-      };
-    }),
+    async (a) => loadProductDetail(ctx, a.product_id),
   );
 
   if (cfg.readOnly) return;
 
   // ===== Write =====
-  server.registerTool(
+  tool(
     "create_product",
     {
       title: "Create product",
@@ -243,7 +255,7 @@ export function registerProductTools(ctx: ToolContext) {
       },
       annotations: CREATE,
     },
-    wrap(async (a) => {
+    async (a) => {
       let options = a.options;
       let variants = a.variants;
       if (!variants?.length) {
@@ -320,10 +332,10 @@ export function registerProductTools(ctx: ToolContext) {
         variants: (p.variants ?? []).map((v: any) => ({ id: v.id, title: v.title, sku: v.sku })),
         stock: stock.length ? stock : undefined,
       };
-    }),
+    },
   );
 
-  server.registerTool(
+  tool(
     "update_product",
     {
       title: "Update product",
@@ -350,7 +362,7 @@ export function registerProductTools(ctx: ToolContext) {
       },
       annotations: UPDATE,
     },
-    wrap(async ({ product_id, images, category_ids, tags, sales_channel_ids, ...fields }) => {
+    async ({ product_id, images, category_ids, tags, sales_channel_ids, ...fields }) => {
       const body: Record<string, unknown> = defined({
         ...fields,
         images: images?.map((url) => ({ url })),
@@ -375,10 +387,10 @@ export function registerProductTools(ctx: ToolContext) {
       const before = await loadProduct(product_id, view);
       const res = await medusa.post(`/admin/products/${product_id}`, body, { fields: view });
       return { ok: true, before: shape(before), after: shape(res.product) };
-    }),
+    },
   );
 
-  server.registerTool(
+  tool(
     "delete_product",
     {
       title: "Delete product",
@@ -393,10 +405,14 @@ export function registerProductTools(ctx: ToolContext) {
       },
       annotations: { ...DESTRUCTIVE, idempotentHint: true },
     },
-    wrap(async (a) => {
+    async (a, extra) => {
       const p = await loadProduct(a.product_id, "id,title,handle,status,*variants,*variants.inventory_items");
       if (p.title !== a.confirm_title)
         throw new Error(`confirm_title does not match – the product is titled "${p.title}".`);
+      await confirm(
+        extra,
+        `Delete product "${p.title}" (${p.status}) with ${(p.variants ?? []).length} variant(s)? This cannot be undone.`,
+      );
       const inventoryItemIds = [
         ...new Set<string>(
           (p.variants ?? []).flatMap((v: any) => (v.inventory_items ?? []).map((i: any) => i.inventory_item_id)),
@@ -412,11 +428,51 @@ export function registerProductTools(ctx: ToolContext) {
         variants_deleted: (p.variants ?? []).map((v: any) => ({ id: v.id, sku: v.sku })),
         inventory_items: a.delete_inventory_items ? inventory : inventoryItemIds.map((id) => ({ id, result: "kept" })),
       };
-    }),
+    },
+  );
+
+  tool(
+    "add_product_images",
+    {
+      title: "Add product images",
+      description:
+        "Adds images to a product from public image URLs. By default they are downloaded and stored in the shop's own file storage " +
+        "(so the storefront does not depend on the source site). Optionally makes the first one the thumbnail.",
+      inputSchema: {
+        product_id: z.string(),
+        urls: z.array(z.string().url()).min(1).max(10),
+        store_copy: z.boolean().default(true).describe("Upload a copy to the shop's storage instead of linking the URL"),
+        set_thumbnail: z.boolean().default(false).describe("Make the first new image the thumbnail"),
+      },
+      annotations: CREATE,
+    },
+    async (a) => {
+      const p = await loadProduct(a.product_id, "id,title,thumbnail,*images");
+      let urls = a.urls;
+      let uploaded: { id: string; url: string }[] | undefined;
+      if (a.store_copy) {
+        const files = [];
+        for (const u of a.urls) files.push(await fetchImage(u));
+        uploaded = await medusa.upload(files);
+        urls = uploaded.map((f) => f.url);
+      }
+      const images = [...(p.images ?? []).map((i: any) => ({ id: i.id, url: i.url })), ...urls.map((url) => ({ url }))];
+      const body: Record<string, unknown> = { images };
+      if (a.set_thumbnail || !p.thumbnail) body.thumbnail = urls[0];
+      const res = await medusa.post(`/admin/products/${p.id}`, body, { fields: "id,thumbnail,*images" });
+      return {
+        ok: true,
+        product: { id: p.id, title: p.title },
+        added: urls,
+        uploaded_files: uploaded,
+        thumbnail: res.product?.thumbnail,
+        images: (res.product?.images ?? []).length,
+      };
+    },
   );
 
   // ===== Variants =====
-  server.registerTool(
+  tool(
     "create_variant",
     {
       title: "Create variant",
@@ -429,7 +485,7 @@ export function registerProductTools(ctx: ToolContext) {
       },
       annotations: CREATE,
     },
-    wrap(async (a) => {
+    async (a) => {
       const p = await loadProduct(a.product_id, "id,title,*options,*options.values");
       const productOptions: any[] = p.options ?? [];
       const given = a.options ?? {};
@@ -468,10 +524,10 @@ export function registerProductTools(ctx: ToolContext) {
       const v = (res.product?.variants ?? []).find((x: any) => (a.sku ? x.sku === a.sku : x.title === title));
       const stock = await stockNewVariants(p.id, [{ sku: a.sku, title, stock: a.stock }], a.location_id);
       return { ok: true, product_id: p.id, variant: v ? { id: v.id, title: v.title, sku: v.sku } : undefined, stock: stock[0] };
-    }),
+    },
   );
 
-  server.registerTool(
+  tool(
     "update_variant",
     {
       title: "Update variant",
@@ -486,7 +542,7 @@ export function registerProductTools(ctx: ToolContext) {
       },
       annotations: UPDATE,
     },
-    wrap(async ({ product_id, variant_id, ...fields }) => {
+    async ({ product_id, variant_id, ...fields }) => {
       const body = defined(fields);
       if (!Object.keys(body).length) throw new Error("Nothing to update.");
       const path = `/admin/products/${product_id}/variants/${variant_id}`;
@@ -495,10 +551,10 @@ export function registerProductTools(ctx: ToolContext) {
       await medusa.post(path, body);
       const after = (await medusa.get(path, { fields: view })).variant;
       return { ok: true, before, after };
-    }),
+    },
   );
 
-  server.registerTool(
+  tool(
     "delete_variant",
     {
       title: "Delete variant",
@@ -513,11 +569,12 @@ export function registerProductTools(ctx: ToolContext) {
       },
       annotations: { ...DESTRUCTIVE, idempotentHint: true },
     },
-    wrap(async (a) => {
+    async (a, extra) => {
       const path = `/admin/products/${a.product_id}/variants/${a.variant_id}`;
       const v = (await medusa.get(path, { fields: "id,title,sku,*inventory_items" })).variant;
       const expected = v.sku || v.title;
       if (a.confirm !== expected) throw new Error(`confirm does not match – expected "${expected}".`);
+      await confirm(extra, `Delete variant "${v.title}"${v.sku ? ` (${v.sku})` : ""}? This cannot be undone.`);
       const inventoryItemIds: string[] = (v.inventory_items ?? []).map((i: any) => i.inventory_item_id).filter(Boolean);
       await medusa.delete(path);
       return {
@@ -527,10 +584,10 @@ export function registerProductTools(ctx: ToolContext) {
           ? await removeInventoryItems(inventoryItemIds)
           : inventoryItemIds.map((id) => ({ id, result: "kept" })),
       };
-    }),
+    },
   );
 
-  server.registerTool(
+  tool(
     "set_variant_price",
     {
       title: "Set variant price",
@@ -545,7 +602,7 @@ export function registerProductTools(ctx: ToolContext) {
       },
       annotations: UPDATE,
     },
-    wrap(async (a) => {
+    async (a) => {
       const cur = a.currency_code.toLowerCase();
       const path = `/admin/products/${a.product_id}/variants/${a.variant_id}`;
       const v = (await medusa.get(path, { fields: "id,title,sku,*prices" })).variant;
@@ -564,6 +621,6 @@ export function registerProductTools(ctx: ToolContext) {
       if (before === undefined) next.push({ currency_code: cur, amount: a.amount } as any);
       await medusa.post(path, { prices: next });
       return { ok: true, variant: { id: v.id, title: v.title, sku: v.sku }, currency: cur, before, after: a.amount };
-    }),
+    },
   );
 }

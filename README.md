@@ -2,7 +2,13 @@
 
 🇨🇿 [Česky](README.cs.md)
 
-An [MCP](https://modelcontextprotocol.io) server for the **Medusa v2 Admin API**. It gives Claude (or any MCP client) access to orders, customers, products and inventory, computes sales reports, and manages the store – fulfillment, payments and refunds, returns, draft orders, products and variants, catalog, promotions and price lists – with guard rails on destructive actions.
+An [MCP](https://modelcontextprotocol.io) server for the **Medusa v2 Admin API**. It lets Claude, ChatGPT or any MCP client run a Medusa store: orders, payments and refunds, returns, order edits, draft orders, products and catalog, inventory, customers, promotions and price lists – plus sales, customer and restock analytics with **interactive dashboards** right in the chat.
+
+- **55 tools** for day-to-day store management, and `medusa_request` for any other Admin API endpoint
+- **Interactive views** (MCP Apps) – a sales dashboard and a restock planner render inline in Claude and ChatGPT
+- **Prompts** – ready-made workflows (store briefing, fulfillment, returns, restocking, monthly report…) as slash commands
+- **Resources** – orders, products and customers as attachable context, with autocompletion
+- **Guard rails** – previews (dry run) for bulk changes, confirmation dialogs for destructive actions, an audit log of every change
 
 It runs in two modes:
 
@@ -13,48 +19,59 @@ It is listed in the [MCP Registry](https://registry.modelcontextprotocol.io) as 
 
 ## Tools
 
-48 tools that cover day-to-day store management. Anything else is reachable through `medusa_request`.
-
-**Read and report**
+**Read and analyze**
 
 | Tool | What it does |
 |---|---|
 | `get_store_info` | regions and currencies, sales channels, stock locations, shipping options and profiles, return and refund reasons |
-| `list_orders` / `get_order` | orders by full-text, date range, customer or status; full detail by ID or order number (`1042`, `#1042`) including payments, refunds and returns |
-| `list_customers` / `get_customer` | customers (also by group), order history, total spent |
+| `list_orders` / `get_order` | orders by full-text, date range, customer or status; full detail by ID or order number (`1042`) with payments, refunds, discount codes and returns |
+| `list_customers` / `get_customer` | customers (also by group or e-mail), order history, total spent |
 | `list_customer_groups` | customer groups |
-| `list_products` / `get_product` | products by status, collection, category or tag; variants, options, prices, inventory items |
+| `list_products` / `get_product` | products by status, collection, category or tag; variants, options, prices, images, inventory items (by ID or handle) |
 | `list_catalog` | categories (tree), collections, tags, product types |
 | `list_inventory` | stock per location, `low_stock_threshold` to find what's running out |
-| `list_promotions` | discount codes with value, conditions, usage and validity |
-| `list_price_lists` | sales and customer-group price lists, with their prices |
-| `sales_report` | revenue, AOV, units, unique customers, day/week/month series, top products |
+| `list_promotions` / `list_price_lists` | discount codes with conditions, usage and validity; sale and customer-group price lists |
+| `sales_report` | revenue, net revenue after refunds, AOV, units, customers – **compared with the previous period or last year**, day/week/month series, top products and variants, countries, discount codes, sales channels · *interactive dashboard* |
+| `customer_report` | new vs returning customers, repeat purchase rate, top customers, lapsed customers worth winning back |
+| `inventory_forecast` | sales velocity vs stock: days of cover, out-of-stock / reorder-now / reorder-soon, suggested order quantities, slow movers · *interactive restock planner* |
 
 **Write** (not registered with `MEDUSA_READ_ONLY=true`)
 
 | Area | Tools |
 |---|---|
 | Fulfillment | `create_fulfillment` (defaults: all remaining items, the only stock location), `create_shipment` (tracking number), `mark_delivered`, `cancel_fulfillment` |
-| Orders | `update_order` (email, addresses, metadata), `complete_order`, `cancel_order` |
-| Payments | `mark_order_paid` (bank transfer, cash on delivery), `capture_payment`, `refund_payment` (checks the refundable amount) |
+| Orders | `update_order` (email, addresses, metadata), `edit_order` (add, change or remove items – previews the new total first), `complete_order`, `cancel_order` |
+| Payments | `mark_order_paid` (bank transfer, cash on delivery – also for converted draft orders), `capture_payment`, `refund_payment` (checks the refundable amount) |
 | Returns | `create_return` (defaults to every shipped item), `receive_return` (puts goods back in stock) |
 | Draft orders | `create_draft_order` (items by variant or SKU, custom prices, shipping), `convert_draft_order` |
-| Products | `create_product` (simple or with options and variants, initial stock, defaults for sales channel and shipping profile), `update_product`, `delete_product` (requires `confirm_title`) |
-| Variants | `create_variant` (adds new option values automatically), `update_variant`, `delete_variant` (requires `confirm`), `set_variant_price` (keeps all other prices) |
+| Products | `create_product` (simple or with options and variants, initial stock, defaults for sales channel and shipping profile), `update_product`, `add_product_images` (from URLs, copied to the shop's storage), `delete_product` |
+| Variants | `create_variant` (adds new option values automatically), `update_variant`, `delete_variant`, `set_variant_price` (keeps all other prices) |
 | Catalog | `save_category`, `delete_category`, `save_collection`, `delete_collection` (create or update, add/remove products) |
 | Inventory | `set_stock_level` (absolute or `adjust_by: +10`, adds the item to a new location) |
 | Customers | `save_customer` (create/update, address, groups), `save_customer_group`, `delete_customer_group` |
 | Promotions | `create_promotion` (percentage, fixed or free shipping; products, categories, collections, customer groups; dates and usage limit), `update_promotion`, `delete_promotion` |
 | Price lists | `save_price_list` (sales and B2B prices, upserts prices by variant or SKU), `delete_price_list` |
+| Bulk | `bulk_update_prices` (percent, amount or fixed price with price endings like 199 or 19.99), `bulk_set_stock` (deliveries, stock-takes), `bulk_update_products` (publish, categories, tags, collection, sales channels) – all **preview first** with `dry_run` |
 
 **Generic**
 
 | Tool | What it does |
 |---|---|
-| `medusa_request` | any Admin API endpoint (`GET`, `POST`, `DELETE` under `/admin/`) for things without a dedicated tool – reservations, order edits, exchanges, tax rates… Read-only mode allows `GET` only; writes to `api-keys`, `users` and `invites` are always blocked. Turn it off with `MEDUSA_RAW_API=false`. |
+| `medusa_request` | any Admin API endpoint (`GET`, `POST`, `DELETE` under `/admin/`) for things without a dedicated tool – reservations, exchanges, tax rates… Read-only mode allows `GET` only; writes to `api-keys`, `users` and `invites` are always blocked. Turn it off with `MEDUSA_RAW_API=false`. |
 
-Amounts are in major currency units (Medusa v2 does not store minor units). Plain dates (`2026-09-01`) are interpreted in `REPORT_TIMEZONE` (default `UTC`).
-Destructive tools (cancel, delete, refund, capture, `medusa_request`) carry `destructiveHint`, so clients ask before running them.
+Amounts are in major currency units (Medusa v2 does not store minor units). Plain dates (`2026-09-01`) are interpreted in `REPORT_TIMEZONE` (default `UTC`). Large reports send MCP progress notifications.
+
+Fewer tools, less context: `MEDUSA_TOOLSETS=orders,reports` registers only those groups (`orders`, `customers`, `products`, `catalog`, `inventory`, `pricing`, `promotions`, `reports`, `bulk`, `raw`; `get_store_info` is always on).
+
+## Beyond tools
+
+**Interactive views (MCP Apps).** `sales_report` and `inventory_forecast` come with HTML views that clients supporting [MCP Apps](https://modelcontextprotocol.io/extensions/apps) – Claude, ChatGPT, VS Code, Goose – render inline: KPI tiles with period-over-period changes, a revenue chart, top products, discount codes and countries; and a sortable restock table with status filters, adjustable lead time and a button that asks the assistant to draft a purchase order. The views follow the client's theme and language (Czech or English), switch periods by calling the tools themselves, and make no network requests of their own. Other clients get the same data as text.
+
+**Prompts.** `store_briefing`, `fulfill_orders`, `restock_plan`, `handle_return`, `customer_overview`, `monthly_report` and `plan_promotion` – each walks the assistant through a whole workflow and asks before changing anything. Arguments autocomplete (order numbers, customer e-mails, months).
+
+**Resources.** `medusa://store`, `medusa://orders/{order}`, `medusa://products/{handle}` and `medusa://customers/{email}` – attach an order or a product to the conversation (e.g. with `@` in Claude Code); recent orders are listed and every template autocompletes.
+
+**Confirmations.** Destructive actions – canceling, refunding, capturing, deleting, bulk changes and writes through `medusa_request` – ask the user directly through [MCP elicitation](https://modelcontextprotocol.io/specification/2025-11-25/client/elicitation) with a plain-language summary ("Refund 249 CZK to the customer of order 1042?") when the client supports it (Claude Code). A declined dialog changes nothing. Turn it off with `MEDUSA_CONFIRM_DESTRUCTIVE=false`. The stateless remote connector cannot elicit, so there the client's own tool approval applies.
 
 ## 1. Create a Medusa API key
 
@@ -69,9 +86,9 @@ claude plugin marketplace add trhonpavel/medusa-mcp
 claude plugin install medusa@medusa-mcp
 ```
 
-Claude Code asks for the backend URL and the API key when you enable the plugin (the key goes to the system keychain). Write tools stay off until you turn off **Read-only** in `/config`. The plugin adds two skills:
+Claude Code asks for the backend URL and the API key when you enable the plugin (the key goes to the system keychain). Write tools stay off until you turn off **Read-only** in `/config`. Besides the server's prompts, the plugin adds two skills:
 
-- `store-briefing` – yesterday's and month-to-date sales, paid orders waiting to ship, low stock
+- `store-briefing` – sales vs the previous period, paid orders waiting to ship, what to restock
 - `fulfill-orders` – fulfill paid orders and add tracking numbers, after you confirm the list
 
 ### Claude Desktop extension
@@ -150,6 +167,9 @@ claude mcp add --transport http medusa https://mcp.example.com/mcp \
 | `MEDUSA_API_KEY` | yes | | Secret API key (`sk_…`) |
 | `MEDUSA_READ_ONLY` | | `false` | Register read and report tools only |
 | `MEDUSA_RAW_API` | | `true` | Register the generic `medusa_request` tool (GET only when read-only) |
+| `MEDUSA_TOOLSETS` | | all | Comma-separated tool groups to register, e.g. `orders,reports` |
+| `MEDUSA_CONFIRM_DESTRUCTIVE` | | `true` | Ask for confirmation through MCP elicitation before destructive actions (clients that support it) |
+| `AUDIT_LOG` | | | File that receives every write tool call as a JSON line (they always go to stderr too) |
 | `REPORT_TIMEZONE` | | `UTC` | IANA timezone for date filters and report buckets |
 | `MEDUSA_TIMEOUT_MS` | | `20000` | Timeout for Medusa requests |
 | `PUBLIC_URL` | HTTP | | Public HTTPS origin of this server (without `/mcp`) |
@@ -181,6 +201,10 @@ claude mcp add --transport http medusa https://mcp.example.com/mcp \
 - The consent page sends `Content-Security-Policy: default-src 'none'` and `X-Frame-Options: DENY`, and compares the password in constant time.
 - Write tools are not marked `readOnlyHint`, and tools that cancel, delete or move money carry `destructiveHint`, so clients like Claude ask for approval before running them.
 - `medusa_request` only reaches `/admin/…` paths, never writes to `api-keys`, `users` or `invites` (so a prompt injection cannot mint new credentials), and can be disabled with `MEDUSA_RAW_API=false`.
+- Every write tool call is logged as `[audit] {…}` on stderr (`docker logs`) – time, tool, OAuth client (e.g. "Claude"), outcome and arguments – and to `AUDIT_LOG` when set.
+- Destructive actions ask for confirmation through MCP elicitation when the client supports it; bulk tools and `edit_order` preview by default and change nothing until called with `dry_run: false`.
+- `add_product_images` downloads only from public http(s) addresses: private, loopback and link-local targets are refused, also after redirects, so the server cannot be used to reach its own network.
+- The interactive views are self-contained HTML (no external scripts or requests) and are rendered by the client in a sandboxed iframe.
 - Set `TRUST_PROXY` to the number of reverse proxies in front of the server, otherwise rate limiting only sees the proxy's IP.
 
 See [SECURITY.md](SECURITY.md) for reporting vulnerabilities.
@@ -189,7 +213,8 @@ See [SECURITY.md](SECURITY.md) for reporting vulnerabilities.
 
 ```bash
 npm ci
-npm test        # build + tests against a mock Medusa (tools and the full OAuth flow)
+npm run build   # TypeScript + the MCP Apps views (dist/apps/*.html with the ext-apps runtime inlined)
+npm test        # build + tests against a mock Medusa (tools, prompts, resources, views and the full OAuth flow)
 npm run smoke   # read-only check against a real Medusa – prints response shapes only, no data
 npm run dev     # HTTP mode via tsx
 ```

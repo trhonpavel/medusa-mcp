@@ -25,6 +25,34 @@ function secretKey(): string {
   return key;
 }
 
+/** Groups of tools that MEDUSA_TOOLSETS can enable; get_store_info is always on. */
+export const TOOLSETS = [
+  "orders",
+  "customers",
+  "products",
+  "catalog",
+  "inventory",
+  "pricing",
+  "promotions",
+  "reports",
+  "bulk",
+  "raw",
+] as const;
+export type Toolset = (typeof TOOLSETS)[number];
+
+/** null = every toolset */
+function toolsets(): Set<Toolset> | null {
+  const v = (process.env.MEDUSA_TOOLSETS ?? "").trim().toLowerCase();
+  if (!v || v === "all") return null;
+  const names = v.split(",").map((s) => s.trim()).filter(Boolean);
+  const unknown = names.filter((n) => !(TOOLSETS as readonly string[]).includes(n));
+  if (unknown.length) {
+    console.error(`[medusa-mcp] Unknown MEDUSA_TOOLSETS: ${unknown.join(", ")}. Available: ${TOOLSETS.join(", ")}`);
+    process.exit(1);
+  }
+  return new Set(names as Toolset[]);
+}
+
 export function loadMedusaConfig() {
   return {
     backendUrl: req("MEDUSA_BACKEND_URL").replace(/\/+$/, ""),
@@ -33,6 +61,11 @@ export function loadMedusaConfig() {
     readOnly: bool("MEDUSA_READ_ONLY", false),
     /** Generic medusa_request tool for endpoints without a dedicated tool (GET only when read-only). */
     rawApi: bool("MEDUSA_RAW_API", true),
+    toolsets: toolsets(),
+    /** Ask the user through MCP elicitation before destructive actions, when the client supports it. */
+    confirmDestructive: bool("MEDUSA_CONFIRM_DESTRUCTIVE", true),
+    /** Optional JSONL file that records every write tool call (they always go to stderr too). */
+    auditLog: process.env.AUDIT_LOG || undefined,
     timeoutMs: Number(process.env.MEDUSA_TIMEOUT_MS ?? 20000),
   };
 }

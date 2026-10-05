@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Restock plan</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: var(--color-background-primary, light-dark(#ffffff, #1f1e1c));
+  --bg2: var(--color-background-secondary, light-dark(#f6f5f2, #2a2926));
+  --fg: var(--color-text-primary, light-dark(#1d1b18, #ecebe7));
+  --muted: var(--color-text-secondary, light-dark(#6b665e, #a8a49c));
+  --line: var(--color-border-tertiary, light-dark(#e6e2da, #3a3833));
+  --red: var(--color-text-danger, light-dark(#b3412f, #f08a78));
+  --red-bg: var(--color-background-danger, light-dark(#fbe9e6, #4a2a24));
+  --amber: var(--color-text-warning, light-dark(#9a6200, #f0c06a));
+  --amber-bg: var(--color-background-warning, light-dark(#fdf3dd, #4a3a1c));
+  --green: var(--color-text-success, light-dark(#2e7d4f, #6cc28f));
+  --green-bg: var(--color-background-success, light-dark(#e6f4ec, #1f3d2c));
+  --bar: light-dark(#3d7ea6, #6fb0d4);
+  --radius: var(--border-radius-lg, 12px);
+  --font: var(--font-sans, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: transparent; }
+body { font: 14px/1.45 var(--font); color: var(--fg); padding: 14px; }
+header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 8px 16px; margin-bottom: 12px; }
+h1 { font-size: 16px; font-weight: var(--font-weight-semibold, 600); margin: 0; }
+.sub { color: var(--muted); font-size: 12px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.chip {
+  font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--bg); color: var(--fg); font-variant-numeric: tabular-nums;
+}
+.chip[aria-pressed="true"] { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.controls { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; margin-bottom: 12px; font-size: 12px; color: var(--muted); }
+.controls label { display: grid; gap: 2px; }
+.controls input { width: 76px; font: inherit; font-size: 13px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg); }
+button.action { font: inherit; font-size: 12px; padding: 5px 12px; border-radius: 8px; cursor: pointer; border: 1px solid var(--line); background: var(--bg2); color: var(--fg); }
+button.primary { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+button:disabled { opacity: .5; cursor: progress; }
+.tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 13px; }
+th { text-align: left; font-weight: var(--font-weight-medium, 500); color: var(--muted); font-size: 12px; padding: 8px 10px; border-bottom: 1px solid var(--line); cursor: pointer; white-space: nowrap; user-select: none; }
+th.num, td.num { text-align: right; }
+td { padding: 7px 10px; border-top: 1px solid var(--line); vertical-align: middle; }
+tr:first-child td { border-top: 0; }
+td .sku { color: var(--muted); font-size: 11px; }
+td.name { min-width: 160px; }
+.badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; white-space: nowrap; }
+.out_of_stock { color: var(--red); background: var(--red-bg); }
+.reorder_now { color: var(--red); background: var(--red-bg); }
+.reorder_soon { color: var(--amber); background: var(--amber-bg); }
+.ok { color: var(--green); background: var(--green-bg); }
+.cover { display: flex; align-items: center; gap: 6px; justify-content: flex-end; white-space: nowrap; }
+.cover .track { width: 60px; height: 4px; background: var(--line); border-radius: 2px; position: relative; overflow: hidden; }
+.cover .track i { position: absolute; inset: 0 auto 0 0; background: var(--bar); border-radius: 2px; }
+.cover .track b { position: absolute; top: -2px; bottom: -2px; width: 1px; background: var(--muted); }
+.order { font-weight: var(--font-weight-semibold, 600); }
+.empty, .error { padding: 28px 12px; text-align: center; color: var(--muted); }
+.error { color: var(--red); }
+details { margin-top: 12px; font-size: 13px; }
+summary { cursor: pointer; color: var(--muted); }
+details ul { margin: 6px 0 0; padding-left: 18px; columns: 2 220px; }
+.loading .tablewrap, .loading .chips { opacity: .45; }
+</style>
+</head>
+<body>
+<header>
+  <div><h1 id="title">Restock plan</h1><div class="sub" id="subtitle"></div></div>
+  <button class="action primary" id="po" hidden></button>
+</header>
+<div class="chips" id="chips"></div>
+<div class="controls" id="controls"></div>
+<main id="main"><div class="empty">Loading…</div></main>
+<details id="slow" hidden><summary id="slowTitle"></summary><ul id="slowList"></ul></details>
+<script type="module">
+/*__MCP_APPS_RUNTIME__*/
+
+const { App, applyDocumentTheme, applyHostStyleVariables, applyHostFonts } = McpApps;
+
+const TEXT = {
+  en: {
+    title: "Restock plan", loading: "Loading…", none: "Nothing needs restocking.", error: "Could not load the forecast",
+    all: "All", needs: "To order", status: { out_of_stock: "Out of stock", reorder_now: "Reorder now", reorder_soon: "Reorder soon", ok: "OK" },
+    cols: { name: "Product", per_day: "Sold / day", available: "Available", cover: "Days of cover", status: "Status", order: "Order" },
+    window: (d, f, to) => `Sales over ${d} days (${f} – ${to})`, lead: "Lead time (days)", coverage: "Cover (days)", days: "History (days)",
+    recalc: "Recalculate", po: (n) => `Draft a purchase order (${n} SKU${n === 1 ? "" : "s"})`, slow: (n) => `${n} slow mover${n === 1 ? "" : "s"} – in stock, no sales`,
+    days_short: "d", pcs: "pcs",
+    message: (rows, s) => `Please draft a purchase order for these items (lead time ${s.lead_time_days} days, cover ${s.coverage_days} days):\n` +
+      rows.map((r) => `- ${r.sku ?? r.title}: ${r.suggested_order} pcs (${r.title}, ${r.available} in stock)`).join("\n"),
+  },
+  cs: {
+    title: "Plán naskladnění", loading: "Načítám…", none: "Nic není potřeba doobjednat.", error: "Předpověď se nepodařilo načíst",
+    all: "Vše", needs: "K objednání", status: { out_of_stock: "Vyprodáno", reorder_now: "Objednat hned", reorder_soon: "Objednat brzy", ok: "OK" },
+    cols: { name: "Produkt", per_day: "Prodej / den", available: "Skladem", cover: "Vydrží (dní)", status: "Stav", order: "Objednat" },
+    window: (d, f, to) => `Prodeje za ${d} dní (${f} – ${to})`, lead: "Dodací lhůta (dny)", coverage: "Pokrýt (dny)", days: "Historie (dny)",
+    recalc: "Přepočítat", po: (n) => `Připravit objednávku u dodavatele (${n} SKU)`,
+    slow: (n) => `${n} ${n === 1 ? "ležák" : n >= 2 && n <= 4 ? "ležáky" : "ležáků"} – skladem, bez prodeje`,
+    days_short: "d", pcs: "ks",
+    message: (rows, s) => `Připrav prosím objednávku u dodavatele pro tyto položky (dodací lhůta ${s.lead_time_days} dní, pokrýt ${s.coverage_days} dní):\n` +
+      rows.map((r) => `- ${r.sku ?? r.title}: ${r.suggested_order} ks (${r.title}, skladem ${r.available})`).join("\n"),
+  },
+};
+let locale = navigator.language || "en";
+let t = TEXT.en;
+const state = { data: null, loading: true, error: null, filter: "needs", sort: { key: "status", dir: 1 } };
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const num = (v) => Number(v ?? 0).toLocaleString(locale, { maximumFractionDigits: 2 });
+const RANK = { out_of_stock: 0, reorder_now: 1, reorder_soon: 2, ok: 3 };
+const dateFmt = (ymd) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd ?? "")) return ymd ?? "";
+  const [y, m, d] = ymd.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString(locale, { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+};
+
+function setLocale(l) {
+  locale = l || locale;
+  const lc = locale.toLowerCase();
+  t = lc.startsWith("cs") || lc.startsWith("sk") ? TEXT.cs : TEXT.en;
+  document.documentElement.lang = t === TEXT.cs ? "cs" : "en";
+}
+setLocale(locale);
+function applyContext(ctx) {
+  if (!ctx) return;
+  if (ctx.theme) applyDocumentTheme(ctx.theme);
+  if (ctx.styles?.variables) applyHostStyleVariables(ctx.styles.variables);
+  if (ctx.styles?.css?.fonts) applyHostFonts(ctx.styles.css.fonts);
+  if (ctx.locale) setLocale(ctx.locale);
+}
+function parse(result) {
+  if (!result) return { error: "No result" };
+  if (result.isError) return { error: result.content?.find((c) => c.type === "text")?.text ?? "Error" };
+  if (result.structuredContent) return { data: result.structuredContent };
+  try { return { data: JSON.parse(result.content?.find((c) => c.type === "text")?.text ?? "") }; }
+  catch { return { error: "Unexpected response" }; }
+}
+function show(result) {
+  const r = parse(result);
+  state.error = r.error ?? null;
+  if (r.data) state.data = r.data;
+  state.loading = false;
+  render();
+}
+
+const app = new App({ name: "Medusa restock plan", version: "1.0.0" });
+app.ontoolinput = () => { state.loading = true; render(); };
+app.ontoolresult = show;
+app.onhostcontextchanged = () => { applyContext(app.getHostContext()); render(); };
+app.ontoolcancelled = () => { state.loading = false; render(); };
+
+async function recalc() {
+  const s = state.data?.settings ?? {};
+  const args = {
+    days: Number($("in-days").value) || state.data?.window?.days || 30,
+    lead_time_days: Number($("in-lead").value) || 0,
+    coverage_days: Number($("in-cov").value) || 30,
+    include_ok: true,
+    limit: 500,
+  };
+  if (s.location_id) args.location_id = s.location_id;
+  state.loading = true; render();
+  try { show(await app.callServerTool({ name: "inventory_forecast", arguments: args })); }
+  catch (e) { state.loading = false; state.error = String(e?.message ?? e); render(); }
+}
+
+async function draftPo() {
+  const rows = (state.data?.items ?? []).filter((r) => r.suggested_order > 0);
+  if (!rows.length) return;
+  try {
+    await app.sendMessage({ role: "user", content: [{ type: "text", text: t.message(rows, state.data.settings) }] });
+  } catch (e) { state.error = String(e?.message ?? e); render(); }
+}
+
+function sorted(rows) {
+  const { key, dir } = state.sort;
+  const val = (r) => key === "status" ? RANK[r.status] * 100000 + r.days_of_cover : key === "name" ? (r.title ?? "").toLowerCase() : r[key] ?? 0;
+  return [...rows].sort((a, b) => (val(a) > val(b) ? 1 : val(a) < val(b) ? -1 : 0) * dir);
+}
+
+function render() {
+  document.body.classList.toggle("loading", state.loading && !!state.data);
+  $("title").textContent = t.title;
+  const d = state.data;
+  if (!d) {
+    $("main").innerHTML = state.error ? `<div class="error">${esc(t.error)}: ${esc(state.error)}</div>` : `<div class="empty">${esc(t.loading)}</div>`;
+    return;
+  }
+  $("subtitle").textContent = t.window(d.window?.days, dateFmt(d.window?.from), dateFmt(d.window?.to));
+  const items = d.items ?? [];
+  const counts = Object.fromEntries(Object.keys(RANK).map((k) => [k, items.filter((r) => r.status === k).length]));
+  const needs = items.filter((r) => r.status !== "ok").length;
+  const filters = [["needs", `${t.needs} ${needs}`], ...Object.keys(RANK).filter((k) => counts[k]).map((k) => [k, `${t.status[k]} ${counts[k]}`]), ["all", `${t.all} ${items.length}`]];
+  if (!filters.some(([k]) => k === state.filter)) state.filter = "needs";
+  $("chips").innerHTML = filters.map(([k, label]) => `<button class="chip" data-f="${k}" aria-pressed="${state.filter === k}">${esc(label)}</button>`).join("");
+  $("chips").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => { state.filter = b.dataset.f; render(); }));
+
+  const s = d.settings ?? {};
+  if (!$("in-lead")) {
+    $("controls").innerHTML =
+      `<label>${esc(t.days)}<input id="in-days" type="number" min="7" max="365"></label>` +
+      `<label>${esc(t.lead)}<input id="in-lead" type="number" min="0" max="180"></label>` +
+      `<label>${esc(t.coverage)}<input id="in-cov" type="number" min="1" max="365"></label>` +
+      `<button class="action" id="recalc"></button>`;
+    $("recalc").addEventListener("click", recalc);
+    $("in-days").value = d.window?.days ?? 30;
+    $("in-lead").value = s.lead_time_days ?? 14;
+    $("in-cov").value = s.coverage_days ?? 30;
+  }
+  $("recalc").textContent = t.recalc;
+  $("recalc").disabled = state.loading;
+
+  const rows = sorted(items.filter((r) => state.filter === "all" || (state.filter === "needs" ? r.status !== "ok" : r.status === state.filter)));
+  const horizon = (s.lead_time_days ?? 14) + (s.coverage_days ?? 30);
+  const cols = [["name", t.cols.name, ""], ["per_day", t.cols.per_day, "num"], ["available", t.cols.available, "num"], ["days_of_cover", t.cols.cover, "num"], ["status", t.cols.status, ""], ["suggested_order", t.cols.order, "num"]];
+  const head = `<tr>${cols.map(([k, label, cls]) => `<th class="${cls}" data-k="${k}">${esc(label)}${state.sort.key === k ? (state.sort.dir > 0 ? " ↑" : " ↓") : ""}</th>`).join("")}</tr>`;
+  const body = rows.map((r) => {
+    const cover = Math.min(100, (100 * r.days_of_cover) / Math.max(horizon, 1));
+    const lead = Math.min(100, (100 * (s.lead_time_days ?? 0)) / Math.max(horizon, 1));
+    return `<tr><td class="name"><div>${esc(r.title)}</div><div class="sku">${esc(r.sku ?? "")}</div></td>` +
+      `<td class="num">${num(r.per_day)}</td><td class="num">${num(r.available)}${r.incoming ? ` <span class="sku">+${num(r.incoming)}</span>` : ""}</td>` +
+      `<td class="num"><div class="cover">${num(r.days_of_cover)}<span class="track"><i style="width:${cover}%"></i><b style="left:${lead}%"></b></span></div></td>` +
+      `<td><span class="badge ${esc(r.status)}">${esc(t.status[r.status] ?? r.status)}</span></td>` +
+      `<td class="num order">${r.suggested_order ? `${num(r.suggested_order)} ${esc(t.pcs)}` : "—"}</td></tr>`;
+  }).join("");
+  let html = state.error ? `<div class="error">${esc(t.error)}: ${esc(state.error)}</div>` : "";
+  html += rows.length ? `<div class="tablewrap"><table><thead>${head}</thead><tbody>${body}</tbody></table></div>` : `<div class="empty">${esc(t.none)}</div>`;
+  $("main").innerHTML = html;
+  $("main").querySelectorAll("th").forEach((th) => th.addEventListener("click", () => {
+    const k = th.dataset.k;
+    state.sort = { key: k, dir: state.sort.key === k ? -state.sort.dir : k === "status" || k === "name" ? 1 : -1 };
+    render();
+  }));
+
+  const toOrder = items.filter((r) => r.suggested_order > 0).length;
+  $("po").hidden = !toOrder;
+  $("po").textContent = t.po(toOrder);
+  $("po").onclick = draftPo;
+
+  const slow = d.slow_movers ?? [];
+  $("slow").hidden = !slow.length;
+  $("slowTitle").textContent = t.slow(d.summary?.slow_movers ?? slow.length);
+  $("slowList").innerHTML = slow.map((r) => `<li>${esc(r.title)} <span class="sub">${esc(r.sku ?? "")} · ${num(r.available)} ${esc(t.pcs)}</span></li>`).join("");
+}
+
+render();
+await app.connect();
+applyContext(app.getHostContext());
+render();
+</script>
+</body>
+</html>

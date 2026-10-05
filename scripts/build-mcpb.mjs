@@ -15,7 +15,15 @@ const stage = join(root, "build", "mcpb");
 const out = join(root, "build", `medusa-mcp-${pkg.version}.mcpb`);
 
 // Tool list from the server with write tools enabled (no requests are made)
-const cfg = { backendUrl: "https://example.invalid", apiKey: "sk_build", readOnly: false, timeoutMs: 1000 };
+const cfg = {
+  backendUrl: "https://example.invalid",
+  apiKey: "sk_build",
+  readOnly: false,
+  timeoutMs: 1000,
+  rawApi: true,
+  toolsets: null,
+  confirmDestructive: true,
+};
 const server = createServer(new MedusaClient(cfg), cfg);
 const [a, b] = InMemoryTransport.createLinkedPair();
 await server.connect(a);

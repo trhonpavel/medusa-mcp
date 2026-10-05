@@ -6,6 +6,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import net from "node:net";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { startMockMedusa, MOCK_KEY } from "./mock-medusa.mjs";
 
 const PUBLIC_URL = "https://mcp.example.com";
@@ -14,6 +16,7 @@ const STATIC = "static-token-for-tests";
 const REDIRECT = "https://claude.ai/api/mcp/auth_callback";
 
 let mock, proc, BASE, dataDir;
+let stderr = "";
 
 const freePort = () =>
   new Promise((res) => {
@@ -42,6 +45,7 @@ before(async () => {
     },
     stdio: ["ignore", "ignore", "pipe"],
   });
+  proc.stderr.on("data", (d) => (stderr += d));
   for (let i = 0; i < 50; i++) {
     try {
       if ((await fetch(`${BASE}/healthz`)).ok) return;
@@ -231,4 +235,30 @@ test("static token works, random token does not", async () => {
   const list = { jsonrpc: "2.0", id: 1, method: "tools/list" };
   assert.equal((await mcp(STATIC, list)).status, 200);
   assert.equal((await mcp("random", list)).status, 401);
+});
+
+test("the remote connector serves tools, progress, views, prompts and audits writes", async () => {
+  const client = new Client({ name: "remote-test", version: "1" }, { capabilities: { elicitation: { form: {} } } });
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(`${BASE}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${STATIC}` } } }),
+  );
+  const { tools } = await client.listTools();
+  assert.equal(tools.length, 55);
+  const progress = [];
+  const report = await client.callTool(
+    { name: "sales_report", arguments: { from: "2026-09-01", to: "2026-09-30" } },
+    undefined,
+    { onprogress: (p) => progress.push(p) },
+  );
+  assert.equal(report.isError, undefined);
+  assert.ok(progress.length >= 1, "progress notifications arrive over SSE");
+  const view = await client.readResource({ uri: "ui://medusa/sales-dashboard.html" });
+  assert.equal(view.contents[0].mimeType, "text/html;profile=mcp-app");
+  assert.equal((await client.listPrompts()).prompts.length, 7);
+  // Stateless HTTP cannot elicit: the write goes through and is audited with the client identity
+  const r = await client.callTool({ name: "update_order", arguments: { order: "1001", metadata: { via: "http" } } });
+  assert.equal(r.isError, undefined, r.content[0].text);
+  await client.close();
+  await new Promise((res) => setTimeout(res, 100));
+  assert.match(stderr, /\[audit\] \{[^\n]*"tool":"update_order","client":"static"[^\n]*"ok":true/);
 });

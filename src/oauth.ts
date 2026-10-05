@@ -216,6 +216,8 @@ export class OwnerPasswordOAuthProvider implements OAuthServerProvider {
       scopes: t.scopes,
       expiresAt: t.expiresAt,
       resource: t.resource ? new URL(t.resource) : undefined,
+      // Shown in the audit log next to write actions
+      extra: { clientName: this.store.state.clients[t.clientId]?.client_name },
     };
   }
 

@@ -2,6 +2,30 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] – 2026-10-05
+
+### Added
+
+- **Interactive views (MCP Apps)**: `sales_report` shows a sales dashboard and `inventory_forecast` a restock planner inline in Claude, ChatGPT and other MCP Apps clients. They follow the client's theme and language (Czech or English), switch periods or recalculate by calling the tools, and are self-contained HTML.
+- `customer_report` – new vs returning customers, repeat purchase rate, top customers and lapsed customers.
+- `inventory_forecast` – sales velocity vs stock: days of cover, reorder status and suggested quantities, slow movers.
+- `sales_report` compares with the previous period or the same period last year, subtracts refunds (`net_revenue`), and breaks down countries, discount codes, variants and sales channels.
+- Bulk tools with a dry-run preview: `bulk_update_prices` (percent, amount or fixed price, price endings like 199 or 19.99), `bulk_set_stock`, `bulk_update_products`.
+- `edit_order` – add, change or remove items of an existing order, with a preview of the new total and what the customer owes or gets back.
+- `add_product_images` – images from URLs, copied to the shop's storage; private and local addresses are refused.
+- Prompts: `store_briefing`, `fulfill_orders`, `restock_plan`, `handle_return`, `customer_overview`, `monthly_report`, `plan_promotion`, with argument completion.
+- Resources: `medusa://store`, `medusa://orders/{order}`, `medusa://products/{handle}`, `medusa://customers/{email}`, with completion.
+- Confirmation dialogs through MCP elicitation before destructive actions, in clients that support it (`MEDUSA_CONFIRM_DESTRUCTIVE`).
+- Audit log: every write tool call is logged to stderr with the OAuth client name, and to `AUDIT_LOG` when set.
+- `MEDUSA_TOOLSETS` registers only selected tool groups.
+- Progress notifications while large reports load.
+- `get_order` shows discount codes, paid, refunded and outstanding amounts; `get_product` accepts a handle and `get_customer` an e-mail.
+
+### Changed
+
+- Tool results leave out `null` fields, which saves tokens on Medusa objects.
+- GET requests are retried on network errors and 429/502/503/504; store settings (regions, locations, channels) are cached for a minute.
+
 ## [0.3.0] – 2026-10-03
 
 ### Added

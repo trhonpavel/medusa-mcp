@@ -8,7 +8,6 @@ import {
   optionalBoundary,
   RO,
   UPDATE,
-  wrap,
   type ToolContext,
 } from "./helpers.js";
 
@@ -58,7 +57,7 @@ function shapePromotion(p: any) {
 }
 
 export function registerPromotionTools(ctx: ToolContext) {
-  const { server, medusa, cfg } = ctx;
+  const { tool, medusa, cfg, confirm } = ctx;
 
   async function resolvePromotion(ref: { promotion_id?: string; code?: string }) {
     if (ref.promotion_id) return (await medusa.get(`/admin/promotions/${ref.promotion_id}`, { fields: PROMO_FIELDS })).promotion;
@@ -69,7 +68,7 @@ export function registerPromotionTools(ctx: ToolContext) {
     return hit;
   }
 
-  server.registerTool(
+  tool(
     "list_promotions",
     {
       title: "List promotions",
@@ -82,7 +81,7 @@ export function registerPromotionTools(ctx: ToolContext) {
       },
       annotations: RO,
     },
-    wrap(async (a) => {
+    async (a) => {
       const res = await medusa.get("/admin/promotions", {
         fields: PROMO_FIELDS,
         q: a.q,
@@ -92,12 +91,12 @@ export function registerPromotionTools(ctx: ToolContext) {
         offset: a.offset,
       });
       return { count: res.count, offset: res.offset, promotions: (res.promotions ?? []).map(shapePromotion) };
-    }),
+    },
   );
 
   if (cfg.readOnly) return;
 
-  server.registerTool(
+  tool(
     "create_promotion",
     {
       title: "Create promotion",
@@ -132,7 +131,7 @@ export function registerPromotionTools(ctx: ToolContext) {
       },
       annotations: CREATE,
     },
-    wrap(async (a) => {
+    async (a) => {
       if (a.discount_type === "fixed" && !a.currency_code) throw new Error("A fixed discount needs currency_code.");
       if (a.discount_type === "percentage" && a.value > 100) throw new Error("A percentage cannot exceed 100.");
       const targetRules = [
@@ -181,10 +180,10 @@ export function registerPromotionTools(ctx: ToolContext) {
       const p = (await medusa.post("/admin/promotions", body)).promotion;
       const full = (await medusa.get(`/admin/promotions/${p.id}`, { fields: PROMO_FIELDS })).promotion;
       return { ok: true, promotion: shapePromotion(full) };
-    }),
+    },
   );
 
-  server.registerTool(
+  tool(
     "update_promotion",
     {
       title: "Update promotion",
@@ -203,7 +202,7 @@ export function registerPromotionTools(ctx: ToolContext) {
       },
       annotations: UPDATE,
     },
-    wrap(async (a) => {
+    async (a) => {
       const p = await resolvePromotion(a);
       const before = shapePromotion(p);
       const starts = optionalBoundary(a.starts_at, false);
@@ -228,10 +227,10 @@ export function registerPromotionTools(ctx: ToolContext) {
       else if (starts === undefined && ends === undefined) throw new Error("Nothing to update.");
       const after = (await medusa.get(`/admin/promotions/${p.id}`, { fields: PROMO_FIELDS })).promotion;
       return { ok: true, before, after: shapePromotion(after) };
-    }),
+    },
   );
 
-  server.registerTool(
+  tool(
     "delete_promotion",
     {
       title: "Delete promotion",
@@ -241,8 +240,9 @@ export function registerPromotionTools(ctx: ToolContext) {
       inputSchema: { promotion_id: z.string().optional(), code: z.string().optional() },
       annotations: { ...DESTRUCTIVE, idempotentHint: true },
     },
-    wrap(async (a) => {
+    async (a, extra) => {
       const p = await resolvePromotion(a);
+      await confirm(extra, `Delete promotion ${p.code}? The code stops working immediately.`);
       await medusa.delete(`/admin/promotions/${p.id}`);
       // create_promotion / update_promotion name the campaign they create after the code
       let campaignDeleted: string | undefined;
@@ -254,6 +254,6 @@ export function registerPromotionTools(ctx: ToolContext) {
         }
       }
       return { ok: true, deleted: { id: p.id, code: p.code }, campaign_deleted: campaignDeleted };
-    }),
+    },
   );
 }

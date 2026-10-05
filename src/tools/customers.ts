@@ -12,16 +12,73 @@ import {
   round2,
   summarizeOrder,
   UPDATE,
-  wrap,
   type ToolContext,
 } from "./helpers.js";
 
 const CUSTOMER_FIELDS = "id,email,first_name,last_name,company_name,phone,has_account,created_at";
 
-export function registerCustomerTools(ctx: ToolContext) {
-  const { server, medusa, cfg } = ctx;
+const shapeCustomer = (c: any) => ({
+  id: c.id,
+  email: c.email,
+  first_name: c.first_name,
+  last_name: c.last_name,
+  company_name: c.company_name,
+  phone: c.phone,
+  has_account: c.has_account,
+  created_at: c.created_at,
+  groups: c.groups?.map((g: any) => ({ id: g.id, name: g.name })),
+  addresses: c.addresses?.map((ad: any) => ({
+    id: ad.id,
+    name: [ad.first_name, ad.last_name].filter(Boolean).join(" ") || undefined,
+    company: ad.company,
+    address_1: ad.address_1,
+    address_2: ad.address_2,
+    city: ad.city,
+    postal_code: ad.postal_code,
+    country_code: ad.country_code,
+    phone: ad.phone,
+    default_shipping: ad.is_default_shipping || undefined,
+    default_billing: ad.is_default_billing || undefined,
+  })),
+  metadata: c.metadata,
+});
 
-  server.registerTool(
+/** Customer detail with order history – shared by get_customer and the customer resource. Accepts an ID or an e-mail. */
+export async function loadCustomerDetail(ctx: ToolContext, ref: string) {
+  const { medusa } = ctx;
+  let id = ref.trim();
+  if (!id.startsWith("cus_")) {
+    const hits = (await medusa.get("/admin/customers", { email: id, fields: "id", limit: 2 })).customers ?? [];
+    if (hits.length !== 1) throw new Error(`Customer ${ref} not found (use a customer ID or e-mail).`);
+    id = hits[0].id;
+  }
+  const [c, orders] = await Promise.all([
+    medusa.get(`/admin/customers/${id}`, { fields: "*addresses,*groups" }),
+    medusa.listAll("/admin/orders", "orders", { customer_id: id, fields: ORDER_LIST_FIELDS, order: "-created_at" }, 1000),
+  ]);
+  const valid = orders.items.filter((o: any) => o.status !== "canceled" && o.status !== "draft");
+  const spent: Record<string, number> = {};
+  for (const o of valid) {
+    const cur = (o.currency_code ?? "?").toUpperCase();
+    spent[cur] = round2((spent[cur] ?? 0) + Number(o.total ?? 0));
+  }
+  return {
+    customer: shapeCustomer(c.customer),
+    stats: {
+      orders: valid.length,
+      canceled: orders.items.length - valid.length,
+      total_spent: spent,
+      first_order: valid.at(-1)?.created_at,
+      last_order: valid[0]?.created_at,
+    },
+    recent_orders: orders.items.slice(0, 10).map(summarizeOrder),
+  };
+}
+
+export function registerCustomerTools(ctx: ToolContext) {
+  const { tool, medusa, cfg, confirm } = ctx;
+
+  tool(
     "list_customers",
     {
       title: "List customers",
@@ -36,7 +93,7 @@ export function registerCustomerTools(ctx: ToolContext) {
       },
       annotations: RO,
     },
-    wrap(async (a) => {
+    async (a) => {
       const res = await medusa.get("/admin/customers", {
         fields: CUSTOMER_FIELDS,
         order: "-created_at",
@@ -48,48 +105,21 @@ export function registerCustomerTools(ctx: ToolContext) {
         offset: a.offset,
       });
       return { count: res.count, offset: res.offset, customers: res.customers ?? [] };
-    }),
+    },
   );
 
-  server.registerTool(
+  tool(
     "get_customer",
     {
       title: "Get customer",
       description: "Customer detail with addresses, groups and order history (count, total spent, recent orders).",
-      inputSchema: { customer_id: z.string().describe("Customer ID (cus_…)") },
+      inputSchema: { customer_id: z.string().describe("Customer ID (cus_…) or e-mail") },
       annotations: RO,
     },
-    wrap(async (a) => {
-      const [c, orders] = await Promise.all([
-        medusa.get(`/admin/customers/${a.customer_id}`, { fields: "*addresses,*groups" }),
-        medusa.listAll(
-          "/admin/orders",
-          "orders",
-          { customer_id: a.customer_id, fields: ORDER_LIST_FIELDS, order: "-created_at" },
-          1000,
-        ),
-      ]);
-      const valid = orders.items.filter((o: any) => o.status !== "canceled" && o.status !== "draft");
-      const spent: Record<string, number> = {};
-      for (const o of valid) {
-        const cur = (o.currency_code ?? "?").toUpperCase();
-        spent[cur] = round2((spent[cur] ?? 0) + Number(o.total ?? 0));
-      }
-      return {
-        customer: c.customer,
-        stats: {
-          orders: valid.length,
-          canceled: orders.items.length - valid.length,
-          total_spent: spent,
-          first_order: valid.at(-1)?.created_at,
-          last_order: valid[0]?.created_at,
-        },
-        recent_orders: orders.items.slice(0, 10).map(summarizeOrder),
-      };
-    }),
+    async (a) => loadCustomerDetail(ctx, a.customer_id),
   );
 
-  server.registerTool(
+  tool(
     "list_customer_groups",
     {
       title: "List customer groups",
@@ -97,7 +127,7 @@ export function registerCustomerTools(ctx: ToolContext) {
       inputSchema: { q: z.string().optional(), limit: limitSchema, offset: offsetSchema },
       annotations: RO,
     },
-    wrap(async (a) => {
+    async (a) => {
       const res = await medusa.get("/admin/customer-groups", {
         fields: "id,name,metadata,created_at",
         q: a.q,
@@ -106,12 +136,12 @@ export function registerCustomerTools(ctx: ToolContext) {
         offset: a.offset,
       });
       return { count: res.count, offset: res.offset, customer_groups: res.customer_groups ?? [] };
-    }),
+    },
   );
 
   if (cfg.readOnly) return;
 
-  server.registerTool(
+  tool(
     "save_customer",
     {
       title: "Create or update customer",
@@ -137,7 +167,7 @@ export function registerCustomerTools(ctx: ToolContext) {
       },
       annotations: UPDATE,
     },
-    wrap(async (a) => {
+    async (a) => {
       const fields = defined({
         email: a.email,
         first_name: a.first_name,
@@ -160,11 +190,11 @@ export function registerCustomerTools(ctx: ToolContext) {
         await medusa.post(`/admin/customers/${id}/customer-groups`, defined({ add: a.add_to_groups, remove: a.remove_from_groups }));
       const customer = (await medusa.get(`/admin/customers/${id}`, { fields: `${CUSTOMER_FIELDS},*addresses,*groups` }))
         .customer;
-      return { ok: true, created, customer };
-    }),
+      return { ok: true, created, customer: shapeCustomer(customer) };
+    },
   );
 
-  server.registerTool(
+  tool(
     "save_customer_group",
     {
       title: "Create or update customer group",
@@ -178,7 +208,7 @@ export function registerCustomerTools(ctx: ToolContext) {
       },
       annotations: UPDATE,
     },
-    wrap(async (a) => {
+    async (a) => {
       const fields = defined({ name: a.name, metadata: a.metadata });
       let id = a.group_id;
       let created = false;
@@ -193,10 +223,10 @@ export function registerCustomerTools(ctx: ToolContext) {
         await medusa.post(`/admin/customer-groups/${id}/customers`, defined({ add: a.add_customers, remove: a.remove_customers }));
       const group = (await medusa.get(`/admin/customer-groups/${id}`, { fields: "id,name,metadata" })).customer_group;
       return { ok: true, created, customer_group: group };
-    }),
+    },
   );
 
-  server.registerTool(
+  tool(
     "delete_customer_group",
     {
       title: "Delete customer group",
@@ -205,9 +235,11 @@ export function registerCustomerTools(ctx: ToolContext) {
       inputSchema: { group_id: z.string() },
       annotations: { ...DESTRUCTIVE, idempotentHint: true },
     },
-    wrap(async (a) => {
+    async (a, extra) => {
+      const g = (await medusa.get(`/admin/customer-groups/${a.group_id}`, { fields: "id,name" })).customer_group;
+      await confirm(extra, `Delete customer group "${g.name}"? Its customers stay.`);
       await medusa.delete(`/admin/customer-groups/${a.group_id}`);
       return { ok: true, deleted: a.group_id };
-    }),
+    },
   );
 }

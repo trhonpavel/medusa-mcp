@@ -1,10 +1,10 @@
 import { z } from "zod";
-import { defined, DESTRUCTIVE, idList, metadataSchema, RO, UPDATE, wrap, type ToolContext } from "./helpers.js";
+import { defined, DESTRUCTIVE, idList, metadataSchema, RO, UPDATE, type ToolContext } from "./helpers.js";
 
 export function registerCatalogTools(ctx: ToolContext) {
-  const { server, medusa, cfg } = ctx;
+  const { tool, medusa, cfg, confirm } = ctx;
 
-  server.registerTool(
+  tool(
     "list_catalog",
     {
       title: "Catalog structure",
@@ -15,7 +15,7 @@ export function registerCatalogTools(ctx: ToolContext) {
       },
       annotations: RO,
     },
-    wrap(async (a) => {
+    async (a) => {
       const [categories, collections, tags, types] = await Promise.all([
         medusa.listAll(
           "/admin/product-categories",
@@ -40,12 +40,12 @@ export function registerCatalogTools(ctx: ToolContext) {
         tags: tags.items,
         types: types.items,
       };
-    }),
+    },
   );
 
   if (cfg.readOnly) return;
 
-  server.registerTool(
+  tool(
     "save_category",
     {
       title: "Create or update category",
@@ -67,7 +67,7 @@ export function registerCatalogTools(ctx: ToolContext) {
       },
       annotations: UPDATE,
     },
-    wrap(async ({ category_id, add_products, remove_products, ...rest }) => {
+    async ({ category_id, add_products, remove_products, ...rest }) => {
       const fields = defined(rest);
       let id = category_id;
       let created = false;
@@ -88,10 +88,10 @@ export function registerCatalogTools(ctx: ToolContext) {
         })
       ).product_category;
       return { ok: true, created, category };
-    }),
+    },
   );
 
-  server.registerTool(
+  tool(
     "delete_category",
     {
       title: "Delete category",
@@ -99,13 +99,15 @@ export function registerCatalogTools(ctx: ToolContext) {
       inputSchema: { category_id: z.string() },
       annotations: { ...DESTRUCTIVE, idempotentHint: true },
     },
-    wrap(async (a) => {
+    async (a, extra) => {
+      const c = (await medusa.get(`/admin/product-categories/${a.category_id}`, { fields: "id,name" })).product_category;
+      await confirm(extra, `Delete category "${c.name}"? Its products stay.`);
       await medusa.delete(`/admin/product-categories/${a.category_id}`);
       return { ok: true, deleted: a.category_id };
-    }),
+    },
   );
 
-  server.registerTool(
+  tool(
     "save_collection",
     {
       title: "Create or update collection",
@@ -122,7 +124,7 @@ export function registerCatalogTools(ctx: ToolContext) {
       },
       annotations: UPDATE,
     },
-    wrap(async ({ collection_id, add_products, remove_products, ...rest }) => {
+    async ({ collection_id, add_products, remove_products, ...rest }) => {
       const fields = defined(rest);
       let id = collection_id;
       let created = false;
@@ -139,10 +141,10 @@ export function registerCatalogTools(ctx: ToolContext) {
         });
       const collection = (await medusa.get(`/admin/collections/${id}`, { fields: "id,title,handle" })).collection;
       return { ok: true, created, collection };
-    }),
+    },
   );
 
-  server.registerTool(
+  tool(
     "delete_collection",
     {
       title: "Delete collection",
@@ -150,9 +152,11 @@ export function registerCatalogTools(ctx: ToolContext) {
       inputSchema: { collection_id: z.string() },
       annotations: { ...DESTRUCTIVE, idempotentHint: true },
     },
-    wrap(async (a) => {
+    async (a, extra) => {
+      const c = (await medusa.get(`/admin/collections/${a.collection_id}`, { fields: "id,title" })).collection;
+      await confirm(extra, `Delete collection "${c.title}"? Its products stay.`);
       await medusa.delete(`/admin/collections/${a.collection_id}`);
       return { ok: true, deleted: a.collection_id };
-    }),
+    },
   );
 }

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   addressSchema,
+  money,
   CREATE,
   dateFilter,
   defined,
@@ -15,7 +16,6 @@ import {
   round2,
   summarizeOrder,
   UPDATE,
-  wrap,
   type ToolContext,
 } from "./helpers.js";
 
@@ -43,8 +43,104 @@ function shapePayment(p: any) {
   };
 }
 
+/** Full order detail – shared by get_order and the order resource. */
+export async function loadOrderDetail(ctx: ToolContext, ref: string) {
+  const { medusa, resolveOrderId } = ctx;
+  const id = await resolveOrderId(ref);
+  // Every field is prefixed with + or *: a single plain field would make Medusa drop its defaults
+  // (display_id, totals, email, currency_code…).
+  const [res, returns] = await Promise.all([
+    medusa.get(`/admin/orders/${id}`, {
+      fields:
+        "+summary,+email,+currency_code,+metadata,*items,*items.detail,*items.adjustments,*shipping_address,*billing_address," +
+        "*customer,*shipping_methods,*fulfillments,*fulfillments.items,*fulfillments.labels,*payment_collections," +
+        "*payment_collections.payments,*payment_collections.payments.captures,*payment_collections.payments.refunds",
+    }),
+    medusa
+      .get("/admin/returns", { order_id: id, fields: "id,status,created_at,received_at,canceled_at,*items", limit: 50 })
+      .then((r) => (r.returns ?? []) as any[])
+      .catch(() => undefined),
+  ]);
+  const o = res.order;
+  const discounts: Record<string, number> = {};
+  for (const i of o.items ?? [])
+    for (const adj of i.adjustments ?? [])
+      if (adj.code) discounts[adj.code] = round2((discounts[adj.code] ?? 0) + Number(adj.amount ?? 0));
+  const addr = (a: any) =>
+    a && {
+      name: [a.first_name, a.last_name].filter(Boolean).join(" ") || undefined,
+      company: a.company,
+      address_1: a.address_1,
+      address_2: a.address_2,
+      city: a.city,
+      postal_code: a.postal_code,
+      province: a.province,
+      country_code: a.country_code,
+      phone: a.phone,
+    };
+  return {
+    ...summarizeOrder(o),
+    customer_id: o.customer_id ?? o.customer?.id,
+    subtotal: o.subtotal,
+    shipping_total: o.shipping_total,
+    tax_total: o.tax_total,
+    discount_total: o.discount_total,
+    discount_codes: Object.keys(discounts).length ? discounts : undefined,
+    paid_total: o.summary?.paid_total,
+    refunded_total: o.summary?.refunded_total,
+    outstanding: o.summary?.pending_difference || undefined,
+    items: (o.items ?? []).map((i: any) => ({
+      id: i.id,
+      title: i.product_title ?? i.title,
+      variant: i.variant_title,
+      sku: i.variant_sku,
+      variant_id: i.variant_id,
+      quantity: i.quantity,
+      unit_price: i.unit_price,
+      total: i.total,
+      fulfilled: i.detail?.fulfilled_quantity,
+      shipped: i.detail?.shipped_quantity,
+      returned: i.detail?.return_received_quantity || undefined,
+    })),
+    shipping_address: addr(o.shipping_address),
+    billing_address: addr(o.billing_address),
+    shipping_methods: (o.shipping_methods ?? []).map((m: any) => ({ name: m.name, amount: m.amount })),
+    fulfillments: (o.fulfillments ?? []).map((f: any) => ({
+      id: f.id,
+      location_id: f.location_id,
+      created_at: f.created_at,
+      shipped_at: f.shipped_at,
+      delivered_at: f.delivered_at,
+      canceled_at: f.canceled_at,
+      items: (f.items ?? []).map((i: any) => ({ line_item_id: i.line_item_id, quantity: i.quantity, title: i.title })),
+      tracking: (f.labels ?? []).map((l: any) => ({ number: l.tracking_number, url: l.tracking_url })),
+    })),
+    payments: (o.payment_collections ?? []).map((p: any) => ({
+      id: p.id,
+      status: p.status,
+      amount: p.amount,
+      captured: p.captured_amount,
+      refunded: p.refunded_amount,
+      payments: p.payments ? p.payments.map(shapePayment) : undefined,
+    })),
+    returns: returns?.map((r) => ({
+      id: r.id,
+      status: r.status,
+      created_at: r.created_at,
+      received_at: r.received_at ?? undefined,
+      canceled_at: r.canceled_at ?? undefined,
+      items: (r.items ?? []).map((i: any) => ({
+        line_item_id: i.item_id,
+        quantity: i.quantity,
+        received: i.received_quantity,
+      })),
+    })),
+    metadata: o.metadata,
+  };
+}
+
 export function registerOrderTools(ctx: ToolContext) {
-  const { server, medusa, cfg, resolveOrderId, resolveLocationId, resolveRegionId, variantIdBySku } = ctx;
+  const { tool, medusa, cfg, confirm, resolveOrderId, resolveLocationId, resolveRegionId, variantIdBySku } = ctx;
 
   async function loadPayments(orderId: string) {
     const o = (
@@ -84,7 +180,7 @@ export function registerOrderTools(ctx: ToolContext) {
   }
 
   // ===== Read =====
-  server.registerTool(
+  tool(
     "list_orders",
     {
       title: "List orders",
@@ -109,7 +205,7 @@ export function registerOrderTools(ctx: ToolContext) {
       },
       annotations: RO,
     },
-    wrap(async (a) => {
+    async (a) => {
       const query: Record<string, any> = {
         fields: ORDER_LIST_FIELDS,
         order: "-created_at",
@@ -136,10 +232,10 @@ export function registerOrderTools(ctx: ToolContext) {
       }
       const res = await medusa.get("/admin/orders", { ...query, limit: a.limit, offset: a.offset });
       return { count: res.count, offset: res.offset, orders: (res.orders ?? []).map(summarizeOrder) };
-    }),
+    },
   );
 
-  server.registerTool(
+  tool(
     "get_order",
     {
       title: "Get order",
@@ -149,84 +245,13 @@ export function registerOrderTools(ctx: ToolContext) {
       inputSchema: { order: z.string().describe("Order ID (order_…) or order number, e.g. 1042") },
       annotations: RO,
     },
-    wrap(async (a) => {
-      const id = await resolveOrderId(a.order);
-      // Every field is prefixed with + or *: a single plain field would make Medusa drop its defaults
-      // (display_id, totals, email, currency_code…).
-      const [res, returns] = await Promise.all([
-        medusa.get(`/admin/orders/${id}`, {
-          fields:
-            "+summary,+email,+currency_code,+metadata,*items,*items.detail,*shipping_address,*billing_address," +
-            "*customer,*shipping_methods,*fulfillments,*fulfillments.items,*fulfillments.labels,*payment_collections," +
-            "*payment_collections.payments,*payment_collections.payments.captures,*payment_collections.payments.refunds",
-        }),
-        medusa
-          .get("/admin/returns", { order_id: id, fields: "id,status,created_at,received_at,canceled_at,*items", limit: 50 })
-          .then((r) => (r.returns ?? []) as any[])
-          .catch(() => undefined),
-      ]);
-      const o = res.order;
-      return {
-        ...summarizeOrder(o),
-        subtotal: o.subtotal,
-        shipping_total: o.shipping_total,
-        tax_total: o.tax_total,
-        discount_total: o.discount_total,
-        summary: o.summary,
-        items: (o.items ?? []).map((i: any) => ({
-          id: i.id,
-          title: i.product_title ?? i.title,
-          variant: i.variant_title,
-          sku: i.variant_sku,
-          quantity: i.quantity,
-          unit_price: i.unit_price,
-          total: i.total,
-          fulfilled: i.detail?.fulfilled_quantity,
-          shipped: i.detail?.shipped_quantity,
-          returned: i.detail?.return_received_quantity || undefined,
-        })),
-        shipping_address: o.shipping_address,
-        billing_address: o.billing_address,
-        shipping_methods: (o.shipping_methods ?? []).map((m: any) => ({ name: m.name, amount: m.amount })),
-        fulfillments: (o.fulfillments ?? []).map((f: any) => ({
-          id: f.id,
-          location_id: f.location_id,
-          created_at: f.created_at,
-          shipped_at: f.shipped_at,
-          delivered_at: f.delivered_at,
-          canceled_at: f.canceled_at,
-          items: (f.items ?? []).map((i: any) => ({ line_item_id: i.line_item_id, quantity: i.quantity, title: i.title })),
-          tracking: (f.labels ?? []).map((l: any) => ({ number: l.tracking_number, url: l.tracking_url })),
-        })),
-        payments: (o.payment_collections ?? []).map((p: any) => ({
-          id: p.id,
-          status: p.status,
-          amount: p.amount,
-          captured: p.captured_amount,
-          refunded: p.refunded_amount,
-          payments: p.payments ? p.payments.map(shapePayment) : undefined,
-        })),
-        returns: returns?.map((r) => ({
-          id: r.id,
-          status: r.status,
-          created_at: r.created_at,
-          received_at: r.received_at ?? undefined,
-          canceled_at: r.canceled_at ?? undefined,
-          items: (r.items ?? []).map((i: any) => ({
-            line_item_id: i.item_id,
-            quantity: i.quantity,
-            received: i.received_quantity,
-          })),
-        })),
-        metadata: o.metadata,
-      };
-    }),
+    async (a) => loadOrderDetail(ctx, a.order),
   );
 
   if (cfg.readOnly) return;
 
   // ===== Fulfillment =====
-  server.registerTool(
+  tool(
     "create_fulfillment",
     {
       title: "Create fulfillment",
@@ -244,7 +269,7 @@ export function registerOrderTools(ctx: ToolContext) {
       },
       annotations: CREATE,
     },
-    wrap(async (a) => {
+    async (a) => {
       const id = await resolveOrderId(a.order);
       let items = a.items?.map((i) => ({ id: i.line_item_id, quantity: i.quantity }));
       if (!items) {
@@ -271,10 +296,10 @@ export function registerOrderTools(ctx: ToolContext) {
         fulfilled_items: items,
         location_id: locationId,
       };
-    }),
+    },
   );
 
-  server.registerTool(
+  tool(
     "create_shipment",
     {
       title: "Mark as shipped",
@@ -289,7 +314,7 @@ export function registerOrderTools(ctx: ToolContext) {
       },
       annotations: CREATE,
     },
-    wrap(async (a) => {
+    async (a) => {
       const id = await resolveOrderId(a.order);
       const all = await loadFulfillments(id);
       const open = all.filter((f) => !f.shipped_at && !f.canceled_at);
@@ -308,10 +333,10 @@ export function registerOrderTools(ctx: ToolContext) {
       }
       await medusa.post(`/admin/orders/${id}/fulfillments/${f.id}/shipments`, body);
       return { ok: true, order_id: id, fulfillment_id: f.id, fulfillment_status: await fulfillmentStatus(id) };
-    }),
+    },
   );
 
-  server.registerTool(
+  tool(
     "mark_delivered",
     {
       title: "Mark as delivered",
@@ -323,7 +348,7 @@ export function registerOrderTools(ctx: ToolContext) {
       },
       annotations: UPDATE,
     },
-    wrap(async (a) => {
+    async (a) => {
       const id = await resolveOrderId(a.order);
       const all = await loadFulfillments(id);
       const f = pickFulfillment(
@@ -334,10 +359,10 @@ export function registerOrderTools(ctx: ToolContext) {
       );
       await medusa.post(`/admin/orders/${id}/fulfillments/${f.id}/mark-as-delivered`, {});
       return { ok: true, order_id: id, fulfillment_id: f.id, fulfillment_status: await fulfillmentStatus(id) };
-    }),
+    },
   );
 
-  server.registerTool(
+  tool(
     "cancel_fulfillment",
     {
       title: "Cancel fulfillment",
@@ -351,7 +376,7 @@ export function registerOrderTools(ctx: ToolContext) {
       },
       annotations: DESTRUCTIVE,
     },
-    wrap(async (a) => {
+    async (a, extra) => {
       const id = await resolveOrderId(a.order);
       const all = await loadFulfillments(id);
       const f = pickFulfillment(
@@ -360,15 +385,17 @@ export function registerOrderTools(ctx: ToolContext) {
         all.filter((x) => !x.shipped_at && !x.canceled_at),
         "canceled",
       );
+      const units = (f.items ?? []).reduce((n: number, i: any) => n + Number(i.quantity ?? 0), 0);
+      await confirm(extra, `Cancel fulfillment ${f.id} (${units} units) of order ${a.order}?`);
       await medusa.post(`/admin/orders/${id}/fulfillments/${f.id}/cancel`, {
         no_notification: !a.notify_customer,
       });
       return { ok: true, order_id: id, fulfillment_id: f.id, fulfillment_status: await fulfillmentStatus(id) };
-    }),
+    },
   );
 
   // ===== Order lifecycle =====
-  server.registerTool(
+  tool(
     "complete_order",
     {
       title: "Complete order",
@@ -376,14 +403,14 @@ export function registerOrderTools(ctx: ToolContext) {
       inputSchema: { order: z.string().describe("Order ID or order number") },
       annotations: UPDATE,
     },
-    wrap(async (a) => {
+    async (a) => {
       const id = await resolveOrderId(a.order);
       const res = await medusa.post(`/admin/orders/${id}/complete`, {});
       return { ok: true, order_id: id, status: res.order?.status };
-    }),
+    },
   );
 
-  server.registerTool(
+  tool(
     "cancel_order",
     {
       title: "Cancel order",
@@ -392,14 +419,16 @@ export function registerOrderTools(ctx: ToolContext) {
       inputSchema: { order: z.string().describe("Order ID or order number") },
       annotations: { ...DESTRUCTIVE, idempotentHint: true },
     },
-    wrap(async (a) => {
+    async (a, extra) => {
       const id = await resolveOrderId(a.order);
+      const o = (await medusa.get(`/admin/orders/${id}`, { fields: "id,display_id,email,total,currency_code,status" })).order;
+      await confirm(extra, `Cancel order #${o.display_id} (${o.email}, ${money(o.total, o.currency_code)})? This cannot be undone.`);
       const res = await medusa.post(`/admin/orders/${id}/cancel`);
       return { ok: true, order_id: id, status: res.order?.status, payment_status: res.order?.payment_status };
-    }),
+    },
   );
 
-  server.registerTool(
+  tool(
     "update_order",
     {
       title: "Update order",
@@ -415,7 +444,7 @@ export function registerOrderTools(ctx: ToolContext) {
       },
       annotations: UPDATE,
     },
-    wrap(async ({ order, ...fields }) => {
+    async ({ order, ...fields }) => {
       const id = await resolveOrderId(order);
       const body = defined(fields);
       if (!Object.keys(body).length) throw new Error("Nothing to update.");
@@ -425,11 +454,11 @@ export function registerOrderTools(ctx: ToolContext) {
       const after = (await medusa.get(`/admin/orders/${id}`, { fields: fieldList })).order;
       const pick = (o: any) => Object.fromEntries(Object.keys(body).map((k) => [k, o[k]]));
       return { ok: true, order_id: id, before: pick(before), after: pick(after) };
-    }),
+    },
   );
 
   // ===== Payments =====
-  server.registerTool(
+  tool(
     "mark_order_paid",
     {
       title: "Mark order as paid",
@@ -439,7 +468,7 @@ export function registerOrderTools(ctx: ToolContext) {
       inputSchema: { order: z.string().describe("Order ID or order number") },
       annotations: UPDATE,
     },
-    wrap(async (a) => {
+    async (a) => {
       const id = await resolveOrderId(a.order);
       const { order, collections } = await loadPayments(id);
       let unpaid = collections.filter((c) => ["not_paid", "awaiting", "partially_authorized"].includes(c.status));
@@ -464,10 +493,10 @@ export function registerOrderTools(ctx: ToolContext) {
         payment_collection_created: created || undefined,
         payment_status: after.payment_status,
       };
-    }),
+    },
   );
 
-  server.registerTool(
+  tool(
     "capture_payment",
     {
       title: "Capture payment",
@@ -481,7 +510,7 @@ export function registerOrderTools(ctx: ToolContext) {
       },
       annotations: DESTRUCTIVE,
     },
-    wrap(async (a) => {
+    async (a, extra) => {
       const id = await resolveOrderId(a.order);
       const { payments } = await loadPayments(id);
       const open = payments.filter((p) => !p.canceled_at && p.captured < Number(p.amount ?? 0));
@@ -494,13 +523,17 @@ export function registerOrderTools(ctx: ToolContext) {
               ? "The order has no payment waiting for capture."
               : `Multiple payments can be captured, specify payment_id: ${open.map((x) => x.id).join(", ")}`,
         );
+      await confirm(
+        extra,
+        `Capture ${money(a.amount ?? Number(p.amount) - p.captured, p.currency)} from the customer for order ${a.order}?`,
+      );
       await medusa.post(`/admin/payments/${p.id}/capture`, defined({ amount: a.amount }));
       const after = (await loadPayments(id)).payments.find((x) => x.id === p.id);
       return { ok: true, order_id: id, payment: after };
-    }),
+    },
   );
 
-  server.registerTool(
+  tool(
     "refund_payment",
     {
       title: "Refund payment",
@@ -516,7 +549,7 @@ export function registerOrderTools(ctx: ToolContext) {
       },
       annotations: DESTRUCTIVE,
     },
-    wrap(async (a) => {
+    async (a, extra) => {
       const id = await resolveOrderId(a.order);
       const { payments } = await loadPayments(id);
       const fits = payments.filter((p) => p.refundable >= a.amount);
@@ -530,6 +563,10 @@ export function registerOrderTools(ctx: ToolContext) {
               : `Multiple payments can cover the refund, specify payment_id: ${fits.map((x) => x.id).join(", ")}`,
         );
       if (a.amount > p.refundable) throw new Error(`Payment ${p.id} has only ${p.refundable} left to refund.`);
+      await confirm(
+        extra,
+        `Refund ${money(a.amount, p.currency)} to the customer of order ${a.order} via ${p.provider}?${a.note ? ` Note: ${a.note}` : ""}`,
+      );
       await medusa.post(
         `/admin/payments/${p.id}/refund`,
         defined({ amount: a.amount, refund_reason_id: a.refund_reason_id, note: a.note }),
@@ -537,11 +574,11 @@ export function registerOrderTools(ctx: ToolContext) {
       const after = await loadPayments(id);
       const status = (await medusa.get(`/admin/orders/${id}`, { fields: "id,payment_status" })).order.payment_status;
       return { ok: true, order_id: id, payment_status: status, payment: after.payments.find((x) => x.id === p.id) };
-    }),
+    },
   );
 
   // ===== Returns =====
-  server.registerTool(
+  tool(
     "create_return",
     {
       title: "Create return",
@@ -568,7 +605,7 @@ export function registerOrderTools(ctx: ToolContext) {
       },
       annotations: CREATE,
     },
-    wrap(async (a) => {
+    async (a) => {
       const id = await resolveOrderId(a.order);
       let items = a.items?.map((i) => defined({ id: i.line_item_id, quantity: i.quantity, reason_id: i.reason_id, internal_note: i.note }));
       if (!items) {
@@ -602,10 +639,10 @@ export function registerOrderTools(ctx: ToolContext) {
         await medusa.delete(`/admin/returns/${ret.id}/request`).catch(() => undefined);
         throw e;
       }
-    }),
+    },
   );
 
-  server.registerTool(
+  tool(
     "receive_return",
     {
       title: "Receive return",
@@ -624,7 +661,7 @@ export function registerOrderTools(ctx: ToolContext) {
       },
       annotations: CREATE,
     },
-    wrap(async (a) => {
+    async (a) => {
       let ret: any;
       const fields = "id,status,order_id,*items";
       if (a.return_id) {
@@ -658,11 +695,123 @@ export function registerOrderTools(ctx: ToolContext) {
         await medusa.delete(`/admin/returns/${ret.id}/receive`).catch(() => undefined);
         throw e;
       }
-    }),
+    },
+  );
+
+  // ===== Order edits =====
+  tool(
+    "edit_order",
+    {
+      title: "Edit order items",
+      description:
+        "Changes the items of an existing order: add products (by SKU or variant), change quantities, or remove items (quantity 0). " +
+        "dry_run (default true) previews the new items and totals and changes nothing; repeat with dry_run false to apply. " +
+        "The result says whether the customer owes money (mark_order_paid) or should get a refund (refund_payment).",
+      inputSchema: {
+        order: z.string().describe("Order ID or order number"),
+        add_items: z
+          .array(
+            z.object({
+              variant_id: z.string().optional(),
+              sku: z.string().optional(),
+              quantity: z.number().int().positive(),
+              unit_price: z.number().nonnegative().optional().describe("Custom price in major units"),
+            }),
+          )
+          .optional(),
+        change_items: z
+          .array(z.object({ line_item_id: z.string(), quantity: z.number().int().min(0).describe("0 removes the item") }))
+          .optional(),
+        note: z.string().optional().describe("Internal note"),
+        dry_run: z.boolean().default(true),
+      },
+      annotations: DESTRUCTIVE,
+      isWrite: (a) => !a.dry_run,
+    },
+    async (a, extra) => {
+      if (!a.add_items?.length && !a.change_items?.length) throw new Error("Provide add_items or change_items.");
+      const id = await resolveOrderId(a.order);
+      const before = (
+        await medusa.get(`/admin/orders/${id}`, {
+          fields: "id,display_id,status,total,currency_code,+summary,*items",
+        })
+      ).order;
+      if (["canceled", "archived", "draft"].includes(before.status))
+        throw new Error(`Order #${before.display_id} is ${before.status} and cannot be edited.`);
+      const add = [];
+      for (const i of a.add_items ?? []) {
+        const variant_id = i.variant_id ?? (i.sku ? await variantIdBySku(i.sku) : undefined);
+        if (!variant_id) throw new Error("Each added item needs variant_id or sku.");
+        add.push(defined({ variant_id, quantity: i.quantity, unit_price: i.unit_price }));
+      }
+      for (const c of a.change_items ?? [])
+        if (!(before.items ?? []).some((i: any) => i.id === c.line_item_id))
+          throw new Error(`Line item ${c.line_item_id} is not on order #${before.display_id}.`);
+
+      await medusa.post("/admin/order-edits", defined({ order_id: id, internal_note: a.note }));
+      let preview: any;
+      try {
+        if (add.length) preview = (await medusa.post(`/admin/order-edits/${id}/items`, { items: add })).order_preview;
+        for (const c of a.change_items ?? [])
+          preview = (await medusa.post(`/admin/order-edits/${id}/items/item/${c.line_item_id}`, { quantity: c.quantity }))
+            .order_preview;
+      } catch (e) {
+        await medusa.delete(`/admin/order-edits/${id}`).catch(() => undefined);
+        throw e;
+      }
+      const shape = (o: any) =>
+        (o.items ?? [])
+          .filter((i: any) => Number(i.quantity ?? 0) > 0)
+          .map((i: any) => ({
+            line_item_id: i.id,
+            title: i.product_title ?? i.title,
+            variant: i.variant_title,
+            sku: i.variant_sku,
+            quantity: Number(i.quantity),
+            unit_price: i.unit_price,
+          }));
+      const summary = {
+        order: `#${before.display_id}`,
+        currency: before.currency_code,
+        total_before: before.total,
+        total_after: preview?.total,
+        difference: round2(Number(preview?.total ?? 0) - Number(before.total ?? 0)),
+        items_after: shape(preview ?? before),
+      };
+      if (a.dry_run) {
+        await medusa.delete(`/admin/order-edits/${id}`);
+        return { dry_run: true, ...summary, next: "Nothing was changed. Call again with dry_run: false to apply." };
+      }
+      try {
+        await confirm(
+          extra,
+          `Edit order #${before.display_id}: total ${money(before.total, before.currency_code)} → ${money(preview?.total, before.currency_code)}?`,
+        );
+        await medusa.post(`/admin/order-edits/${id}/request`, {});
+        await medusa.post(`/admin/order-edits/${id}/confirm`, {});
+      } catch (e) {
+        await medusa.delete(`/admin/order-edits/${id}`).catch(() => undefined);
+        throw e;
+      }
+      const after = (await medusa.get(`/admin/orders/${id}`, { fields: "id,total,+summary" })).order;
+      const pending = Number(after.summary?.pending_difference ?? 0);
+      return {
+        ok: true,
+        ...summary,
+        total_after: after.total,
+        outstanding: pending || undefined,
+        next:
+          pending > 0
+            ? `The customer owes ${money(pending, before.currency_code)} – record it with mark_order_paid once paid.`
+            : pending < 0
+              ? `The customer paid ${money(-pending, before.currency_code)} too much – refund it with refund_payment.`
+              : "Nothing to pay or refund.",
+      };
+    },
   );
 
   // ===== Draft orders =====
-  server.registerTool(
+  tool(
     "create_draft_order",
     {
       title: "Create draft order",
@@ -693,7 +842,7 @@ export function registerOrderTools(ctx: ToolContext) {
       },
       annotations: CREATE,
     },
-    wrap(async (a) => {
+    async (a) => {
       if (!a.email && !a.customer_id) throw new Error("Provide email or customer_id.");
       const regionId = await resolveRegionId(a.region_id);
       const items = [];
@@ -740,10 +889,10 @@ export function registerOrderTools(ctx: ToolContext) {
         items: (d.items ?? []).map((i: any) => ({ title: i.title, sku: i.variant_sku, quantity: i.quantity, unit_price: i.unit_price })),
         next: "Review the draft with the user, then call convert_draft_order.",
       };
-    }),
+    },
   );
 
-  server.registerTool(
+  tool(
     "convert_draft_order",
     {
       title: "Convert draft order",
@@ -751,9 +900,9 @@ export function registerOrderTools(ctx: ToolContext) {
       inputSchema: { draft_order_id: z.string() },
       annotations: CREATE,
     },
-    wrap(async (a) => {
+    async (a) => {
       const res = await medusa.post(`/admin/draft-orders/${a.draft_order_id}/convert-to-order`, {});
       return { ok: true, order: summarizeOrder(res.order ?? {}) };
-    }),
+    },
   );
 }

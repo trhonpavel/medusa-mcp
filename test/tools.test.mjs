@@ -30,9 +30,9 @@ async function call(name, args = {}) {
 }
 const lastRequest = (pred) => [...mock.log].reverse().find(pred);
 
-test("registers all 48 tools with correct annotations", async () => {
+test("registers all 55 tools with correct annotations", async () => {
   const { tools } = await client.listTools();
-  assert.equal(tools.length, 48);
+  assert.equal(tools.length, 55);
   const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
   assert.equal(byName.get_order.annotations.readOnlyHint, true);
   assert.equal(byName.cancel_order.annotations.destructiveHint, true);
@@ -153,7 +153,7 @@ test("read-only mode hides write tools", async () => {
   );
   const { tools } = await ro.listTools();
   await ro.close();
-  assert.equal(tools.length, 14);
+  assert.equal(tools.length, 16);
   assert.ok(tools.every((t) => t.annotations.readOnlyHint));
   const raw = tools.find((t) => t.name === "medusa_request");
   assert.deepEqual(raw.inputSchema.properties.method.enum, ["GET"]);
@@ -358,7 +358,7 @@ test("MEDUSA_RAW_API=false removes medusa_request", async () => {
   );
   const { tools } = await c.listTools();
   await c.close();
-  assert.equal(tools.length, 47);
+  assert.equal(tools.length, 54);
   assert.ok(!tools.some((t) => t.name === "medusa_request"));
 });
 

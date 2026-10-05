@@ -7,7 +7,6 @@ import {
   optionalBoundary,
   RO,
   UPDATE,
-  wrap,
   type ToolContext,
 } from "./helpers.js";
 
@@ -37,7 +36,7 @@ function shapePriceList(pl: any, prices?: any[]) {
 }
 
 export function registerPricingTools(ctx: ToolContext) {
-  const { server, medusa, cfg, variantIdBySku } = ctx;
+  const { tool, medusa, cfg, confirm, variantIdBySku } = ctx;
 
   async function loadPrices(id: string): Promise<any[]> {
     const prices = (await medusa.listAll(`/admin/price-lists/${id}/prices`, "prices", {}, 5000)).items;
@@ -45,7 +44,7 @@ export function registerPricingTools(ctx: ToolContext) {
     return prices.map((p: any) => ({ ...p, variant_id: p.variant_id ?? p.price_set?.variant?.id }));
   }
 
-  server.registerTool(
+  tool(
     "list_price_lists",
     {
       title: "List price lists",
@@ -61,7 +60,7 @@ export function registerPricingTools(ctx: ToolContext) {
       },
       annotations: RO,
     },
-    wrap(async (a) => {
+    async (a) => {
       if (a.price_list_id) {
         const [pl, prices] = await Promise.all([
           medusa.get(`/admin/price-lists/${a.price_list_id}`).then((r) => r.price_list),
@@ -77,12 +76,12 @@ export function registerPricingTools(ctx: ToolContext) {
         offset: a.offset,
       });
       return { count: res.count, offset: res.offset, price_lists: (res.price_lists ?? []).map((pl: any) => shapePriceList(pl)) };
-    }),
+    },
   );
 
   if (cfg.readOnly) return;
 
-  server.registerTool(
+  tool(
     "save_price_list",
     {
       title: "Create or update price list",
@@ -117,7 +116,7 @@ export function registerPricingTools(ctx: ToolContext) {
       },
       annotations: UPDATE,
     },
-    wrap(async (a) => {
+    async (a) => {
       const wanted = [];
       for (const p of a.set_prices ?? []) {
         const variant_id = p.variant_id ?? (p.sku ? await variantIdBySku(p.sku) : undefined);
@@ -170,10 +169,10 @@ export function registerPricingTools(ctx: ToolContext) {
         loadPrices(id),
       ]);
       return { ok: true, created, price_list: shapePriceList(pl, prices) };
-    }),
+    },
   );
 
-  server.registerTool(
+  tool(
     "delete_price_list",
     {
       title: "Delete price list",
@@ -181,9 +180,11 @@ export function registerPricingTools(ctx: ToolContext) {
       inputSchema: { price_list_id: z.string() },
       annotations: { ...DESTRUCTIVE, idempotentHint: true },
     },
-    wrap(async (a) => {
+    async (a, extra) => {
+      const pl = (await medusa.get(`/admin/price-lists/${a.price_list_id}`)).price_list;
+      await confirm(extra, `Delete price list "${pl.title}"? Its prices stop applying immediately.`);
       await medusa.delete(`/admin/price-lists/${a.price_list_id}`);
       return { ok: true, deleted: a.price_list_id };
-    }),
+    },
   );
 }

@@ -1,15 +1,17 @@
 {
   "name": "medusa-mcp",
   "mcpName": "io.github.trhonpavel/medusa-mcp",
-  "version": "0.3.0",
-  "description": "MCP server for the Medusa v2 Admin API – orders, payments, returns, products, catalog, inventory, promotions, price lists and sales reports. stdio or remote (Streamable HTTP + OAuth 2.1).",
+  "version": "0.4.0",
+  "description": "MCP server for the Medusa v2 Admin API – orders, payments, returns, order edits, products, inventory, promotions, bulk changes, sales/customer/restock analytics with interactive MCP Apps dashboards. stdio or remote (Streamable HTTP + OAuth 2.1).",
   "keywords": [
+    "analytics",
+    "claude",
+    "ecommerce",
     "mcp",
-    "model-context-protocol",
+    "mcp-apps",
     "medusa",
     "medusajs",
-    "ecommerce",
-    "claude",
+    "model-context-protocol",
     "oauth"
   ],
   "author": "Pavel Trhoň",
@@ -38,7 +40,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node scripts/build-ui.mjs",
     "build:mcpb": "npm run build && node scripts/build-mcpb.mjs",
     "start": "node dist/index.js http",
     "start:stdio": "node dist/index.js stdio",
@@ -60,6 +62,7 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@modelcontextprotocol/ext-apps": "^1.7.5",
     "@types/express": "^5.0.6",
     "@types/node": "^26.6.3",
     "tsx": "^4.23.15",

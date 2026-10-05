@@ -3,8 +3,8 @@
   "name": "medusa-mcp",
   "display_name": "Medusa",
   "version": "0.0.0",
-  "description": "Manage your Medusa v2 store – orders, payments, returns, products, catalog, inventory, promotions, price lists and sales reports.",
-  "long_description": "Connects Claude to the Medusa v2 Admin API. Read orders, customers, products and stock, compute sales reports, and – when read-only is off – fulfill and ship orders, record payments and refunds, handle returns, create draft orders, create and edit products, variants, categories and collections, run promotions and price lists, and adjust stock. Any other Admin API endpoint is reachable through a generic request tool. The API key stays on your computer.",
+  "description": "Run your Medusa v2 store – orders, payments, returns, products, inventory, promotions – with sales and restock dashboards.",
+  "long_description": "Connects Claude to the Medusa v2 Admin API. Read orders, customers, products and stock; get sales, customer and restock analytics with interactive dashboards; and – when read-only is off – fulfill and ship orders, record payments and refunds, handle returns and order edits, create draft orders, manage products, catalog, promotions and price lists, and make bulk changes with a preview first. Includes ready-made prompts (store briefing, restock plan, monthly report…). The API key stays on your computer.",
   "author": {
     "name": "Pavel Trhoň",
     "url": "https://github.com/trhonpavel"
@@ -16,13 +16,21 @@
   "homepage": "https://github.com/trhonpavel/medusa-mcp#readme",
   "support": "https://github.com/trhonpavel/medusa-mcp/issues",
   "license": "MIT",
-  "keywords": ["medusa", "ecommerce", "orders", "inventory"],
+  "keywords": [
+    "medusa",
+    "ecommerce",
+    "orders",
+    "inventory"
+  ],
   "server": {
     "type": "node",
     "entry_point": "dist/index.js",
     "mcp_config": {
       "command": "node",
-      "args": ["${__dirname}/dist/index.js", "stdio"],
+      "args": [
+        "${__dirname}/dist/index.js",
+        "stdio"
+      ],
       "env": {
         "MEDUSA_BACKEND_URL": "${user_config.backend_url}",
         "MEDUSA_API_KEY": "${user_config.api_key}",
@@ -60,7 +68,11 @@
     }
   },
   "compatibility": {
-    "platforms": ["darwin", "win32", "linux"],
+    "platforms": [
+      "darwin",
+      "win32",
+      "linux"
+    ],
     "runtimes": {
       "node": ">=20.0.0"
     }
